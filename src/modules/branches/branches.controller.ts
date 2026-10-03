@@ -3,6 +3,8 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -22,15 +24,18 @@ import { Auth } from '@/core/auth/decorators/auth.decorator';
 import { CurrentUser } from '@/core/auth/decorators/current-user.decorator';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { BranchesService } from '@/modules/branches/branches.service';
+import { AssignStaffDto } from '@/modules/branches/dto/assign-staff.dto';
 import { CreateBranchDto } from '@/modules/branches/dto/create-branch.dto';
 import { FindBranchDto } from '@/modules/branches/dto/find-branch.dto';
 import { UpdateBranchDto } from '@/modules/branches/dto/update-branch.dto';
+import { BranchStaffService } from '@/modules/branches/services/branch-staff.service';
 import { User } from '@/modules/users/entities/user.entity';
 
 @Controller('branches')
 export class BranchesController {
   constructor(
     private readonly branchesService: BranchesService,
+    private readonly branchStaffService: BranchStaffService,
     private readonly accessControl: AccessControlService,
   ) {}
 
@@ -81,20 +86,80 @@ export class BranchesController {
   }
 
   @Get('restaurant/:restaurantId')
-  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT, UserRoles.USER])
   async findAllByRestaurant(
     @Query() findBranchesDto: FindBranchDto,
     @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
     @CurrentUser() user: User,
   ) {
-    await this.accessControl.assertRestaurantAccess(user, restaurantId);
+    await this.accessControl.assertRestaurantAccess(
+      user,
+      restaurantId,
+      'restaurant',
+    );
     const { limit, offset, ...searchFilters } = findBranchesDto;
+
+    // El personal solo ve las sucursales que tiene asignadas.
+    const onlyBranchIds = AccessControlService.isStaff(user)
+      ? await this.accessControl.getStaffBranchIds(user.id)
+      : undefined;
+
     return this.branchesService.findAllByRestaurant(
       restaurantId,
       { limit, offset },
-      searchFilters,
+      { ...searchFilters, onlyBranchIds },
     );
   }
+
+  //#region Personal de la sucursal (cajeros y meseros)
+  @Get(':restaurantId/:branchId/staff')
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  async findStaff(
+    @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @CurrentUser() user: User,
+  ) {
+    await this.accessControl.assertBranchInRestaurant(
+      user,
+      restaurantId,
+      branchId,
+    );
+    return this.branchStaffService.findByBranch(branchId);
+  }
+
+  @Post(':restaurantId/:branchId/staff')
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  async assignStaff(
+    @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @Body() dto: AssignStaffDto,
+    @CurrentUser() user: User,
+  ) {
+    await this.accessControl.assertBranchInRestaurant(
+      user,
+      restaurantId,
+      branchId,
+    );
+    return this.branchStaffService.assign(branchId, dto.email);
+  }
+
+  @Delete(':restaurantId/:branchId/staff/:userId')
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async removeStaff(
+    @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
+    @Param('branchId', ParseUUIDPipe) branchId: string,
+    @Param('userId', ParseUUIDPipe) staffUserId: string,
+    @CurrentUser() user: User,
+  ) {
+    await this.accessControl.assertBranchInRestaurant(
+      user,
+      restaurantId,
+      branchId,
+    );
+    await this.branchStaffService.remove(branchId, staffUserId);
+  }
+  //#endregion
 
   @Get('generate-qr/:restaurantId/:branchId')
   @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])

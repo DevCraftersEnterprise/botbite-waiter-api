@@ -68,12 +68,14 @@ export class RestaurantsService {
     user: User,
     paginationDto: PaginationDto,
     searchRestaurantsDto: FindRestaurantsDto = {},
+    onlyRestaurantIds?: string[],
   ) {
     return findAllRestaurantsByClientUseCase({
       user,
       paginationDto,
       findRestaurantsDto: searchRestaurantsDto,
       repository: this.restaurantRepository,
+      onlyRestaurantIds,
     });
   }
 

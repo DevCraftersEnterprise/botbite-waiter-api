@@ -8,6 +8,7 @@ import {
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
+import { BranchStaff } from '@/modules/branches/entities/branch-staff.entity';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/messages/entities/cashier-notifications.entity';
@@ -15,10 +16,25 @@ import { Order } from '@/modules/orders/entities/order.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
 
-interface AccessUser {
+export interface AccessUser {
   id: string;
   roles: UserRoles[];
 }
+
+/** Datos de pertenencia de un recurso. */
+interface Tenancy {
+  ownerId: string;
+  restaurantId: string;
+  branchId: string | null;
+}
+
+/**
+ * Qué puede hacer el personal (USER) con un recurso:
+ * - 'branch': si está asignado a la sucursal del recurso.
+ * - 'restaurant': si está asignado a alguna sucursal del restaurante.
+ * - 'none' (por defecto): nunca.
+ */
+export type StaffScope = 'branch' | 'restaurant' | 'none';
 
 /**
  * Punto único para decidir si un usuario puede operar sobre los datos de un
@@ -27,8 +43,10 @@ interface AccessUser {
  *
  * - SUPER y ADMIN: acceso a todos los restaurantes.
  * - CLIENT: solo a los restaurantes de los que es dueño (restaurants.userId).
- * - USER: hoy no está vinculado a ningún restaurante, así que no tiene acceso
- *   a datos de restaurantes.
+ * - USER (cajeros/meseros): solo a las sucursales que tiene asignadas en
+ *   branch_staff, y solo en las rutas que lo permiten explícitamente con
+ *   `staffScope`. Por defecto el personal no tiene acceso, así que agregar
+ *   el rol USER a una ruta de escritura no basta para abrirla.
  */
 @Injectable()
 export class AccessControlService {
@@ -36,7 +54,7 @@ export class AccessControlService {
 
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
-  static isPrivileged(user: AccessUser): boolean {
+  static isPrivileged(user: Pick<AccessUser, 'roles'>): boolean {
     return (
       user.roles?.some(
         (role) => role === UserRoles.SUPER || role === UserRoles.ADMIN,
@@ -44,53 +62,68 @@ export class AccessControlService {
     );
   }
 
+  /** Personal de sucursal: rol USER sin ningún rol superior. */
+  static isStaff(user: Pick<AccessUser, 'roles'>): boolean {
+    const roles = user.roles ?? [];
+    return (
+      roles.includes(UserRoles.USER) &&
+      !roles.includes(UserRoles.CLIENT) &&
+      !AccessControlService.isPrivileged(user)
+    );
+  }
+
   async assertRestaurantAccess(
     user: AccessUser,
     restaurantId: string,
+    staffScope: StaffScope = 'none',
   ): Promise<void> {
-    const ownerId = await this.dataSource
+    const row = await this.dataSource
       .getRepository(Restaurant)
       .createQueryBuilder('restaurant')
       .select('restaurant.userId', 'ownerId')
+      .addSelect('restaurant.id', 'restaurantId')
       .where('restaurant.id = :restaurantId', { restaurantId })
-      .getRawOne<{ ownerId: string }>();
+      .getRawOne<Tenancy>();
 
-    this.assertOwnership(user, ownerId?.ownerId, 'restaurant', restaurantId);
+    await this.assertTenancy(
+      user,
+      row && { ...row, branchId: null },
+      staffScope,
+      'restaurant',
+      restaurantId,
+    );
   }
 
-  async assertBranchAccess(user: AccessUser, branchId: string): Promise<void> {
-    const row = await this.dataSource
-      .getRepository(Branch)
-      .createQueryBuilder('branch')
-      .innerJoin('branch.restaurant', 'restaurant')
-      .select('restaurant.userId', 'ownerId')
+  async assertBranchAccess(
+    user: AccessUser,
+    branchId: string,
+    staffScope: StaffScope = 'none',
+  ): Promise<void> {
+    const row = await this.branchTenancy()
       .where('branch.id = :branchId', { branchId })
-      .getRawOne<{ ownerId: string }>();
+      .getRawOne<Tenancy>();
 
-    this.assertOwnership(user, row?.ownerId, 'branch', branchId);
+    await this.assertTenancy(user, row, staffScope, 'branch', branchId);
   }
 
   /**
    * Verifica que la sucursal pertenezca al restaurante indicado en la ruta y
-   * que el usuario tenga acceso a ese restaurante.
+   * que el usuario tenga acceso a ella.
    */
   async assertBranchInRestaurant(
     user: AccessUser,
     restaurantId: string,
     branchId: string,
+    staffScope: StaffScope = 'none',
   ): Promise<void> {
-    const row = await this.dataSource
-      .getRepository(Branch)
-      .createQueryBuilder('branch')
-      .innerJoin('branch.restaurant', 'restaurant')
-      .select('restaurant.userId', 'ownerId')
+    const row = await this.branchTenancy()
       .where('branch.id = :branchId AND restaurant.id = :restaurantId', {
         branchId,
         restaurantId,
       })
-      .getRawOne<{ ownerId: string }>();
+      .getRawOne<Tenancy>();
 
-    this.assertOwnership(user, row?.ownerId, 'branch', branchId);
+    await this.assertTenancy(user, row, staffScope, 'branch', branchId);
   }
 
   async assertMenuAccess(user: AccessUser, menuId: string): Promise<void> {
@@ -100,28 +133,38 @@ export class AccessControlService {
       .innerJoin('menu.branch', 'branch')
       .innerJoin('branch.restaurant', 'restaurant')
       .select('restaurant.userId', 'ownerId')
+      .addSelect('restaurant.id', 'restaurantId')
+      .addSelect('branch.id', 'branchId')
       .where('menu.id = :menuId', { menuId })
-      .getRawOne<{ ownerId: string }>();
+      .getRawOne<Tenancy>();
 
-    this.assertOwnership(user, row?.ownerId, 'menu', menuId);
+    // El personal no administra menús.
+    await this.assertTenancy(user, row, 'none', 'menu', menuId);
   }
 
-  async assertOrderAccess(user: AccessUser, orderId: string): Promise<void> {
+  async assertOrderAccess(
+    user: AccessUser,
+    orderId: string,
+    staffScope: StaffScope = 'none',
+  ): Promise<void> {
     const row = await this.dataSource
       .getRepository(Order)
       .createQueryBuilder('order')
       .innerJoin('order.branch', 'branch')
       .innerJoin('branch.restaurant', 'restaurant')
       .select('restaurant.userId', 'ownerId')
+      .addSelect('restaurant.id', 'restaurantId')
+      .addSelect('branch.id', 'branchId')
       .where('order.id = :orderId', { orderId })
-      .getRawOne<{ ownerId: string }>();
+      .getRawOne<Tenancy>();
 
-    this.assertOwnership(user, row?.ownerId, 'order', orderId);
+    await this.assertTenancy(user, row, staffScope, 'order', orderId);
   }
 
   async assertNotificationAccess(
     user: AccessUser,
     notificationId: string,
+    staffScope: StaffScope = 'none',
   ): Promise<void> {
     const row = await this.dataSource
       .getRepository(CashierNotification)
@@ -129,10 +172,18 @@ export class AccessControlService {
       .innerJoin('notification.branch', 'branch')
       .innerJoin('branch.restaurant', 'restaurant')
       .select('restaurant.userId', 'ownerId')
+      .addSelect('restaurant.id', 'restaurantId')
+      .addSelect('branch.id', 'branchId')
       .where('notification.id = :notificationId', { notificationId })
-      .getRawOne<{ ownerId: string }>();
+      .getRawOne<Tenancy>();
 
-    this.assertOwnership(user, row?.ownerId, 'notification', notificationId);
+    await this.assertTenancy(
+      user,
+      row,
+      staffScope,
+      'notification',
+      notificationId,
+    );
   }
 
   /**
@@ -164,30 +215,99 @@ export class AccessControlService {
       );
   }
 
+  /** Para el WebSocket: el personal puede escuchar sus sucursales. */
   async canAccessBranch(user: AccessUser, branchId: string): Promise<boolean> {
     try {
-      await this.assertBranchAccess(user, branchId);
+      await this.assertBranchAccess(user, branchId, 'branch');
       return true;
     } catch {
       return false;
     }
   }
 
-  private assertOwnership(
+  /** IDs de las sucursales asignadas a un miembro del personal. */
+  async getStaffBranchIds(userId: string): Promise<string[]> {
+    const rows = await this.dataSource
+      .getRepository(BranchStaff)
+      .find({ where: { userId }, select: { branchId: true } });
+    return rows.map((row) => row.branchId);
+  }
+
+  /** IDs de los restaurantes donde un miembro del personal tiene sucursales. */
+  async getStaffRestaurantIds(userId: string): Promise<string[]> {
+    const rows = await this.dataSource
+      .getRepository(BranchStaff)
+      .createQueryBuilder('staff')
+      .innerJoin('staff.branch', 'branch')
+      .select('DISTINCT branch.restaurantId', 'restaurantId')
+      .where('staff.userId = :userId', { userId })
+      .getRawMany<{ restaurantId: string }>();
+    return rows.map((row) => row.restaurantId);
+  }
+
+  private branchTenancy() {
+    return this.dataSource
+      .getRepository(Branch)
+      .createQueryBuilder('branch')
+      .innerJoin('branch.restaurant', 'restaurant')
+      .select('restaurant.userId', 'ownerId')
+      .addSelect('restaurant.id', 'restaurantId')
+      .addSelect('branch.id', 'branchId');
+  }
+
+  private async assertTenancy(
     user: AccessUser,
-    ownerId: string | undefined,
+    tenancy: Tenancy | undefined,
+    staffScope: StaffScope,
     resource: string,
     resourceId: string,
-  ): void {
-    if (!ownerId) throw new NotFoundException(`${resource} not found`);
+  ): Promise<void> {
+    if (!tenancy?.ownerId) throw new NotFoundException(`${resource} not found`);
 
     if (AccessControlService.isPrivileged(user)) return;
 
-    if (user.roles?.includes(UserRoles.CLIENT) && ownerId === user.id) return;
+    if (user.roles?.includes(UserRoles.CLIENT) && tenancy.ownerId === user.id) {
+      return;
+    }
+
+    if (
+      AccessControlService.isStaff(user) &&
+      (await this.isStaffAllowed(user.id, tenancy, staffScope))
+    ) {
+      return;
+    }
 
     this.logger.warn(
       `User ${user.id} denied access to ${resource} ${resourceId}`,
     );
     throw new ForbiddenException('You do not have access to this resource');
+  }
+
+  private isStaffAllowed(
+    userId: string,
+    tenancy: Tenancy,
+    staffScope: StaffScope,
+  ): Promise<boolean> {
+    if (staffScope === 'none') return Promise.resolve(false);
+
+    const query = this.dataSource
+      .getRepository(BranchStaff)
+      .createQueryBuilder('staff')
+      .where('staff.userId = :userId', { userId });
+
+    if (staffScope === 'branch') {
+      if (!tenancy.branchId) return Promise.resolve(false);
+      query.andWhere('staff.branchId = :branchId', {
+        branchId: tenancy.branchId,
+      });
+    } else {
+      query
+        .innerJoin('staff.branch', 'branch')
+        .andWhere('branch.restaurantId = :restaurantId', {
+          restaurantId: tenancy.restaurantId,
+        });
+    }
+
+    return query.getExists();
   }
 }

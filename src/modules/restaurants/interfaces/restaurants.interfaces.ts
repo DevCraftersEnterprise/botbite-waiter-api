@@ -39,6 +39,8 @@ export interface FindRestaurants {
   paginationDto: PaginationDto;
   findRestaurantsDto: FindRestaurantsDto;
   repository: Repository<Restaurant>;
+  /** Si se indica, solo se listan estos restaurantes (personal de sucursal). */
+  onlyRestaurantIds?: string[];
 }
 
 export interface ChangeRestaurantStatus {

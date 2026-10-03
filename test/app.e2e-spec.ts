@@ -269,6 +269,139 @@ describe('BotBite API (e2e)', () => {
     });
   });
 
+  describe('staff (cashiers and waiters)', () => {
+    const STAFF_EMAIL = 'cajero@botbite.test';
+    let staffToken: string;
+    let staffId: string;
+
+    beforeAll(async () => {
+      const admin = await login(seed.superUser.email);
+      const res = await http()
+        .post('/v1/users/register-user')
+        .set(auth(admin.access_token))
+        .send({ email: STAFF_EMAIL, password: PASSWORD })
+        .expect(201);
+      staffId = res.body.user.id;
+    });
+
+    const staffUrl = () =>
+      `/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/staff`;
+
+    it('has no access before being assigned to a branch', async () => {
+      staffToken = (await login(STAFF_EMAIL)).access_token;
+
+      const restaurants = await http()
+        .get('/v1/restaurants')
+        .set(auth(staffToken))
+        .expect(200);
+      expect(restaurants.body.restaurants).toHaveLength(0);
+
+      await http()
+        .get(`/v1/orders?branchId=${seed.branchA.id}`)
+        .set(auth(staffToken))
+        .expect(403);
+    });
+
+    it('only the branch owner (or an admin) can assign staff', async () => {
+      const otherClient = await login(seed.clientB.email);
+      await http()
+        .post(staffUrl())
+        .set(auth(otherClient.access_token))
+        .send({ email: STAFF_EMAIL })
+        .expect(403);
+
+      // Solo cuentas de personal: un cliente no se puede asignar.
+      const owner = await login(seed.clientA.email);
+      await http()
+        .post(staffUrl())
+        .set(auth(owner.access_token))
+        .send({ email: seed.clientB.email })
+        .expect(404);
+
+      await http()
+        .post(staffUrl())
+        .set(auth(owner.access_token))
+        .send({ email: STAFF_EMAIL })
+        .expect(201);
+
+      const list = await http()
+        .get(staffUrl())
+        .set(auth(owner.access_token))
+        .expect(200);
+      expect(list.body.staff.map((s: { email: string }) => s.email)).toEqual([
+        STAFF_EMAIL,
+      ]);
+    });
+
+    it('reads restaurants, branches, orders and notifications of its branch only', async () => {
+      const restaurants = await http()
+        .get('/v1/restaurants')
+        .set(auth(staffToken))
+        .expect(200);
+      expect(
+        restaurants.body.restaurants.map((r: { id: string }) => r.id),
+      ).toEqual([seed.restaurantA.id]);
+
+      const branches = await http()
+        .get(`/v1/branches/restaurant/${seed.restaurantA.id}`)
+        .set(auth(staffToken))
+        .expect(200);
+      expect(branches.body.branches.map((b: { id: string }) => b.id)).toEqual([
+        seed.branchA.id,
+      ]);
+
+      await http()
+        .get(`/v1/orders?branchId=${seed.branchA.id}`)
+        .set(auth(staffToken))
+        .expect(200);
+      await http()
+        .get(`/v1/messages/notifications?branchId=${seed.branchA.id}`)
+        .set(auth(staffToken))
+        .expect(200);
+
+      await http()
+        .get(`/v1/orders?branchId=${seed.branchB.id}`)
+        .set(auth(staffToken))
+        .expect(403);
+      await http()
+        .get(`/v1/branches/restaurant/${seed.restaurantB.id}`)
+        .set(auth(staffToken))
+        .expect(403);
+    });
+
+    it('cannot modify anything', async () => {
+      await http()
+        .patch(
+          `/v1/branches/restaurant/${seed.restaurantA.id}/${seed.branchA.id}`,
+        )
+        .set(auth(staffToken))
+        .send({ name: 'Hackeada' })
+        .expect(403);
+      await http()
+        .get(`/v1/menus/${seed.branchA.id}`)
+        .set(auth(staffToken))
+        .expect(403);
+      await http()
+        .post(staffUrl())
+        .set(auth(staffToken))
+        .send({ email: STAFF_EMAIL })
+        .expect(403);
+    });
+
+    it('loses access when removed from the branch', async () => {
+      const owner = await login(seed.clientA.email);
+      await http()
+        .delete(`${staffUrl()}/${staffId}`)
+        .set(auth(owner.access_token))
+        .expect(204);
+
+      await http()
+        .get(`/v1/orders?branchId=${seed.branchA.id}`)
+        .set(auth(staffToken))
+        .expect(403);
+    });
+  });
+
   describe('WhatsApp webhook', () => {
     it('rejects unsigned requests', async () => {
       await http()
