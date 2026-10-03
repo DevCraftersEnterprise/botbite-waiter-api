@@ -1,10 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, ILike, Repository } from 'typeorm';
+import { FindOptionsWhere, ILike, In, Repository } from 'typeorm';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 import { FindBranchDto } from '@/modules/branches/dto/find-branch.dto';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { BranchListResponse } from '@/modules/branches/interfaces/branches.interfaces';
+
+export type BranchListFilters = Omit<FindBranchDto, 'limit' | 'offset'> & {
+  /** Si se indica, solo se devuelven estas sucursales (personal asignado). */
+  onlyBranchIds?: string[];
+};
 
 @Injectable()
 export class FindAllBranchesByRestaurantUseCase {
@@ -18,14 +23,24 @@ export class FindAllBranchesByRestaurantUseCase {
   async execute(
     restaurantId: string,
     paginationDto: PaginationDto = {},
-    findBranchDto: FindBranchDto = {},
+    findBranchDto: BranchListFilters = {},
   ): Promise<BranchListResponse> {
     const { limit = 10, offset = 0 } = paginationDto;
-    const { name, search, isActive } = findBranchDto;
+    const { name, search, isActive, onlyBranchIds } = findBranchDto;
+
+    if (onlyBranchIds?.length === 0) {
+      return {
+        branches: [],
+        total: 0,
+        pagination: { limit, offset, totalPages: 0, currentPage: 1 },
+      };
+    }
 
     const whereCoindition: FindOptionsWhere<Branch> = {
       restaurant: { id: restaurantId },
     };
+
+    if (onlyBranchIds) whereCoindition.id = In(onlyBranchIds);
 
     if (name) whereCoindition.name = name;
     if (search) whereCoindition.name = ILike(`%${search}%`);

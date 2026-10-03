@@ -67,37 +67,46 @@ export class MessagesController {
     @Query() query: FindConversationsByBranchDto,
     @CurrentUser() user: User,
   ): Promise<ConversationsListResponse> {
-    await this.accessControl.assertBranchAccess(user, query.branchId);
+    await this.accessControl.assertBranchAccess(user, query.branchId, 'branch');
     return this.conversationService.findByBranch(query.branchId);
   }
 
   @Get('notifications')
-  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT, UserRoles.USER])
   async getNotificationsByBranch(
     @Query() query: FindConversationsByBranchDto,
     @CurrentUser() user: User,
   ) {
-    await this.accessControl.assertBranchAccess(user, query.branchId);
+    await this.accessControl.assertBranchAccess(user, query.branchId, 'branch');
     return this.conversationService.getNotificationsByBranch(query.branchId);
   }
 
+  // El personal de caja marca las notificaciones como atendidas.
   @Patch(':notificationId/read')
-  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT, UserRoles.USER])
   async markNotificationAsRead(
     @Param('notificationId', ParseUUIDPipe) notificationId: string,
     @CurrentUser() user: User,
   ) {
-    await this.accessControl.assertNotificationAccess(user, notificationId);
+    await this.accessControl.assertNotificationAccess(
+      user,
+      notificationId,
+      'branch',
+    );
     await this.conversationService.markNotificationAsRead(notificationId);
   }
 
   @Patch(':notificationId/unread')
-  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT, UserRoles.USER])
   async markNotificationAsUnread(
     @Param('notificationId', ParseUUIDPipe) notificationId: string,
     @CurrentUser() user: User,
   ) {
-    await this.accessControl.assertNotificationAccess(user, notificationId);
+    await this.accessControl.assertNotificationAccess(
+      user,
+      notificationId,
+      'branch',
+    );
     await this.conversationService.markNotificationAsUnread(notificationId);
   }
 }

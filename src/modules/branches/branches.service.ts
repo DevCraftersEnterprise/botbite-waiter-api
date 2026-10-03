@@ -3,7 +3,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { MoreThan, Repository } from 'typeorm';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 import { CreateBranchDto } from '@/modules/branches/dto/create-branch.dto';
-import { FindBranchDto } from '@/modules/branches/dto/find-branch.dto';
 import { UpdateBranchDto } from '@/modules/branches/dto/update-branch.dto';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import {
@@ -14,7 +13,10 @@ import {
 import { BulkCreateBranchesUseCase } from '@/modules/branches/use-cases/bulk-create-branches.usecase';
 import { ChangeBranchStatusUseCase } from '@/modules/branches/use-cases/change-branch-status.usecase';
 import { CreateBranchUseCase } from '@/modules/branches/use-cases/create-branch.usecase';
-import { FindAllBranchesByRestaurantUseCase } from '@/modules/branches/use-cases/find-all-branches-by-restaurant.usecase';
+import {
+  BranchListFilters,
+  FindAllBranchesByRestaurantUseCase,
+} from '@/modules/branches/use-cases/find-all-branches-by-restaurant.usecase';
 import { FindOneBranchUseCase } from '@/modules/branches/use-cases/find-one-branch.usecase';
 import { GenerateQrForBranchUseCase } from '@/modules/branches/use-cases/generate-qr-for-branch.usecase';
 import { UpdateBranchUseCase } from '@/modules/branches/use-cases/update-branch.usecase';
@@ -113,7 +115,7 @@ export class BranchesService {
   findAllByRestaurant(
     restaurantId: string,
     paginationDto: PaginationDto = {},
-    findBranchDto: FindBranchDto = {},
+    findBranchDto: BranchListFilters = {},
   ): Promise<BranchListResponse> {
     return this.findAllBranchesByRestaurantUseCase.execute(
       restaurantId,

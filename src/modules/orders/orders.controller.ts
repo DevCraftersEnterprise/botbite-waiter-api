@@ -44,18 +44,18 @@ export class OrdersController {
     @CurrentUser() user: User,
     @Lang() lang: string,
   ) {
-    await this.accessControl.assertBranchAccess(user, branchId);
+    await this.accessControl.assertBranchAccess(user, branchId, 'branch');
     return this.ordersService.findAllOrders(branchId, lang);
   }
 
   @Get(':id')
-  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT, UserRoles.USER])
   async findOne(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: User,
     @Lang() lang: string,
   ) {
-    await this.accessControl.assertOrderAccess(user, id);
+    await this.accessControl.assertOrderAccess(user, id, 'branch');
     return this.ordersService.findOneOrder(id, lang);
   }
 

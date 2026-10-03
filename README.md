@@ -71,8 +71,20 @@ moverla, junto con los límites de peticiones, a Redis/BullMQ.
 - `super` / `admin`: todos los restaurantes. Solo ellos asignan créditos de
   mensajes y activan/desactivan restaurantes, sucursales y productos.
 - `client`: solo los restaurantes de los que es dueño.
-- `user`: hoy no está vinculado a ningún restaurante, por lo que no accede a
-  datos de restaurantes.
+- `user` (cajeros y meseros): solo las sucursales que tiene asignadas, en
+  modo lectura: restaurantes y sucursales, pedidos, conversaciones y
+  notificaciones (que sí puede marcar como atendidas), además del WebSocket
+  de su sucursal. No modifica nada más.
+
+El dueño (o un admin) asigna al personal a una sucursal por email:
+
+| Método | Ruta | Uso |
+| --- | --- | --- |
+| `GET` | `/v1/branches/:restaurantId/:branchId/staff` | Listar personal |
+| `POST` | `/v1/branches/:restaurantId/:branchId/staff` | Asignar (`{ "email": "..." }`, cuenta con rol `user`) |
+| `DELETE` | `/v1/branches/:restaurantId/:branchId/staff/:userId` | Quitar |
+
+Las cuentas `user` las crea un admin con `POST /v1/users/register-user`.
 
 ### WebSocket
 

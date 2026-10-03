@@ -89,17 +89,23 @@ export class RestaurantsController {
   }
 
   @Get()
-  @Auth([UserRoles.CLIENT, UserRoles.ADMIN, UserRoles.SUPER])
-  findRestaurantsByClient(
+  @Auth([UserRoles.CLIENT, UserRoles.ADMIN, UserRoles.SUPER, UserRoles.USER])
+  async findRestaurantsByClient(
     @Query() findRestaurantsDto: FindRestaurantsDto,
     @CurrentUser() user: User,
   ) {
     const { limit, offset, ...searchFilters } = findRestaurantsDto;
 
+    // El personal ve los restaurantes donde tiene sucursales asignadas.
+    const onlyRestaurantIds = AccessControlService.isStaff(user)
+      ? await this.accessControl.getStaffRestaurantIds(user.id)
+      : undefined;
+
     return this.restaurantsService.findAllRestaurantsByClient(
       user,
       { limit, offset },
       searchFilters,
+      onlyRestaurantIds,
     );
   }
 }
