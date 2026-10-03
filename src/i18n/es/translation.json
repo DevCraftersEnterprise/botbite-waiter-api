@@ -1,0 +1,108 @@
+{
+  "errors": {
+    "user_exists": "El usuario ya existe",
+    "user_not_found": "Usuario no encontrado",
+    "user_inactive": "El usuario está inactivo",
+    "invalid_credentials": "Credenciales inválidas",
+    "invalid_token_type": "Tipo de token inválido",
+    "token_user_mismatch": "El token no pertenece al usuario autenticado",
+    "invalid_refresh_token": "Token de actualización inválido",
+    "too_many_requests": "Demasiados intentos. Inténtalo de nuevo en {{seconds}} segundos",
+    "cannot_activate_own_restaurant": "No puedes activar tu propio restaurante",
+    "restaurant_not_found": "Restaurante no encontrado",
+    "restaurant_creation_failed": "Error al crear el restaurante",
+    "restaurant_not_owned": "No eres propietario de este restaurante",
+    "category_not_found": "Categoría no encontrada",
+    "empty_csv_file": "El archivo CSV está vacío o no contiene productos válidos",
+    "csv_processing_failed": "Error al procesar el archivo CSV",
+    "product_not_owned": "No eres propietario de este producto",
+    "product_not_found": "Producto no encontrado",
+    "branch_not_owned": "No eres propietario de esta sucursal",
+    "branch_not_found": "Sucursal no encontrada"
+  },
+  "auth": {
+    "registration_success": "Registro exitoso",
+    "welcome": "¡Bienvenido!"
+  },
+  "users": {
+    "user_activated": "Usuario activado con éxito",
+    "user_already_active": "El usuario ya está activo",
+    "user_already_inactive": "El usuario ya está inactivo",
+    "user_inactive": "El usuario está inactivo",
+    "user_deactivated": "Usuario desactivado con éxito",
+    "user_is_client": "El usuario es un cliente y no puede realizar esta acción",
+    "user_already_admin": "El usuario ya es un administrador",
+    "user_not_admin": "El usuario no tiene permisos de administrador",
+    "admin_role_added": "Rol de administrador agregado al usuario con éxito",
+    "admin_role_removed": "Rol de administrador removido del usuario con éxito",
+    "cannot_grant_role_to_self": "No puedes otorgarte permisos de administrador a ti mismo",
+    "cannot_remove_role_from_self": "No puedes quitarte permisos de administrador a ti mismo"
+  },
+  "restaurants": {
+    "not_found": "Restaurante no encontrado",
+    "already_active": "El restaurante ya está activo",
+    "activated": "Restaurante activado con éxito",
+    "already_inactive": "El restaurante ya está inactivo",
+    "deactivated": "Restaurante desactivado con éxito",
+    "restaurant_created": "Restaurante creado exitosamente",
+    "restaurant_updated": "Restaurante actualizado exitosamente",
+    "restaurant_activated": "Restaurante activado exitosamente",
+    "restaurant_deactivated": "Restaurante desactivado exitosamente",
+    "restaurant_already_active": "El restaurante ya está activo",
+    "restaurant_already_inactive": "El restaurante ya está inactivo"
+  },
+  "products": {
+    "product_created": "Producto creado exitosamente",
+    "products_bulk_created": "{{count}} productos creados exitosamente",
+    "product_updated": "Producto actualizado exitosamente",
+    "product_deleted": "Producto eliminado exitosamente",
+    "product_not_found": "Producto no encontrado",
+    "product_already_active": "El producto ya está activo",
+    "product_already_inactive": "El producto ya está inactivo",
+    "product_activated": "Producto activado exitosamente",
+    "product_deactivated": "Producto desactivado exitosamente"
+  },
+  "branches": {
+    "branch_created": "Sucursal creada exitosamente",
+    "branches_bulk_created": "{{count}} sucursales creadas exitosamente",
+    "branch_updated": "Sucursal actualizada exitosamente",
+    "branch_deleted": "Sucursal eliminada exitosamente",
+    "branch_already_active": "Sucursal ya está activa",
+    "branch_already_inactive": "Sucursal ya está inactiva",
+    "branch_activated": "Sucursal activada exitosamente",
+    "branch_deactivated": "Sucursal desactivada exitosamente",
+    "branch_found": "Sucursal encontrada exitosamente"
+  },
+  "menus": {
+    "menu_created": "Menú creado exitosamente",
+    "menu_updated": "Menú actualizado exitosamente",
+    "menu_deleted": "Menú eliminado exitosamente",
+    "menu_not_found": "Menú no encontrado",
+    "menuitem_created": "Item de menú creado exitosamente",
+    "menuitem_updated": "Item de menú actualizado exitosamente",
+    "menuitem_deleted": "Item de menú eliminado exitosamente",
+    "menuitem_not_found": "Item de menú no encontrado",
+    "menu_file_uploaded": "Archivo de menú subido exitosamente"
+  },
+  "customers": {
+    "customer_created": "Cliente creado exitosamente",
+    "customer_updated": "Cliente actualizado exitosamente",
+    "customer_deleted": "Cliente eliminado exitosamente",
+    "customer_found": "Cliente encontrado",
+    "customers_found": "Clientes encontrados",
+    "customer_not_found": "Cliente no encontrado",
+    "customer_already_exists": "Ya existe un cliente con ese teléfono"
+  },
+  "orders": {
+    "order_created": "Orden creada exitosamente",
+    "order_updated": "Orden actualizada exitosamente",
+    "order_deleted": "Orden eliminada exitosamente",
+    "order_found": "Orden encontrada",
+    "orders_found": "Órdenes encontradas",
+    "order_not_found": "Orden no encontrada",
+    "orderitem_created": "Item de orden creado exitosamente",
+    "orderitem_updated": "Item de orden actualizado exitosamente",
+    "orderitem_deleted": "Item de orden eliminado exitosamente",
+    "orderitem_not_found": "Item de orden no encontrado"
+  }
+}

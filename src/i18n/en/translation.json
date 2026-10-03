@@ -1,0 +1,107 @@
+{
+  "errors": {
+    "user_exists": "User already exists",
+    "user_not_found": "User not found",
+    "user_inactive": "User is inactive",
+    "invalid_credentials": "Invalid credentials",
+    "invalid_token_type": "Invalid token type",
+    "token_user_mismatch": "Token does not belong to the authenticated user",
+    "invalid_refresh_token": "Invalid refresh token",
+    "too_many_requests": "Too many attempts. Try again in {{seconds}} seconds",
+    "cannot_activate_own_restaurant": "You cannot activate your own restaurant",
+    "restaurant_not_found": "Restaurant not found",
+    "restaurant_creation_failed": "Failed to create restaurant",
+    "restaurant_not_owned": "You don't own this restaurant",
+    "category_not_found": "Category not found",
+    "empty_csv_file": "CSV file is empty or contains no valid products",
+    "csv_processing_failed": "Failed to process CSV file",
+    "product_not_owned": "You do not own this product",
+    "product_not_found": "Product not found",
+    "branch_not_owned": "You do not own this branch",
+    "branch_not_found": "Branch not found"
+  },
+  "auth": {
+    "registration_success": "Registration successful",
+    "welcome": "Welcome!"
+  },
+  "users": {
+    "user_activated": "User activated successfully",
+    "user_already_active": "User is already active",
+    "user_already_inactive": "User is already inactive",
+    "user_inactive": "User is inactive",
+    "user_deactivated": "User deactivated successfully",
+    "user_is_client": "User is a client and cannot perform this action",
+    "user_already_admin": "User is already an admin",
+    "user_not_admin": "User does not have admin permissions",
+    "admin_role_added": "Admin role added to user successfully",
+    "admin_role_removed": "Admin role removed from user successfully",
+    "cannot_grant_role_to_self": "You cannot grant admin permissions to yourself",
+    "cannot_remove_role_from_self": "You cannot remove admin permissions from yourself"
+  },
+  "restaurants": {
+    "not_found": "Restaurant not found",
+    "already_active": "Restaurant is already active",
+    "activated": "Restaurant activated successfully",
+    "already_inactive": "Restaurant is already inactive",
+    "deactivated": "Restaurant deactivated successfully",
+    "restaurant_created": "Restaurant created successfully",
+    "restaurant_updated": "Restaurant updated successfully",
+    "restaurant_activated": "Restaurant activated successfully",
+    "restaurant_deactivated": "Restaurant deactivated successfully",
+    "restaurant_already_active": "Restaurant is already active",
+    "restaurant_already_inactive": "Restaurant is already inactive"
+  },
+  "products": {
+    "product_created": "Product created successfully",
+    "products_bulk_created": "{{count}} products created successfully",
+    "product_updated": "Product updated successfully",
+    "product_deleted": "Product deleted successfully",
+    "product_already_active": "Product is already active",
+    "product_already_inactive": "Product is already inactive",
+    "product_activated": "Product activated successfully",
+    "product_deactivated": "Product deactivated successfully"
+  },
+  "branches": {
+    "branch_created": "Branch created successfully",
+    "branches_bulk_created": "{{count}} branches created successfully",
+    "branch_updated": "Branch updated successfully",
+    "branch_deleted": "Branch deleted successfully",
+    "branch_already_active": "Branch is already active",
+    "branch_already_inactive": "Branch is already inactive",
+    "branch_activated": "Branch activated successfully",
+    "branch_deactivated": "Branch deactivated successfully",
+    "branch_found": "Branch found successfully"
+  },
+  "menus": {
+    "menu_created": "Menu created successfully",
+    "menu_updated": "Menu updated successfully",
+    "menu_deleted": "Menu deleted successfully",
+    "menu_not_found": "Menu not found",
+    "menuitem_created": "Menu item created successfully",
+    "menuitem_updated": "Menu item updated successfully",
+    "menuitem_deleted": "Menu item deleted successfully",
+    "menuitem_not_found": "Menu item not found",
+    "menu_file_uploaded": "Menu file uploaded successfully"
+  },
+  "customers": {
+    "customer_created": "Customer created successfully",
+    "customer_updated": "Customer updated successfully",
+    "customer_deleted": "Customer deleted successfully",
+    "customer_found": "Customer found",
+    "customers_found": "Customers found",
+    "customer_not_found": "Customer not found",
+    "customer_already_exists": "Customer with this phone number already exists"
+  },
+  "orders": {
+    "order_created": "Order created successfully",
+    "order_updated": "Order updated successfully",
+    "order_deleted": "Order deleted successfully",
+    "order_found": "Order found",
+    "orders_found": "Orders found",
+    "order_not_found": "Order not found",
+    "orderitem_created": "Order item created successfully",
+    "orderitem_updated": "Order item updated successfully",
+    "orderitem_deleted": "Order item deleted successfully",
+    "orderitem_not_found": "Order item not found"
+  }
+}

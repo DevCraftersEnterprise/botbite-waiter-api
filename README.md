@@ -1,98 +1,83 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# BotBite Waiter API
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+API de BotBite: mesero virtual por WhatsApp (Twilio) para restaurantes, más el
+backend del panel web (restaurantes, sucursales, productos, menús, pedidos y
+notificaciones de caja en tiempo real).
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Stack: NestJS 11 · TypeORM · PostgreSQL · Socket.IO · Twilio · OpenAI · Cloudinary.
 
-## Description
-
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
+## Puesta en marcha
 
 ```bash
-$ npm install
+npm install
+cp .env.template .env        # y completa los valores
+docker compose up -d db      # Postgres local (opcional)
+npm run migration:run
+npm run start:dev
 ```
 
-## Compile and run the project
+API en `http://localhost:3000/v1`. El webhook de Twilio debe apuntar a
+`https://<tu-dominio>/v1/messages/webhook`.
 
-```bash
-# development
-$ npm run start
+## Scripts
 
-# watch mode
-$ npm run start:dev
+| Script | Uso |
+| --- | --- |
+| `start:dev` | Desarrollo con recarga |
+| `build` / `start:prod` | Compilar y ejecutar `dist` |
+| `migration:run` / `migration:revert` | Migraciones desde `src` (ts-node) |
+| `migration:generate -- src/database/migrations/Nombre` | Generar migración a partir de las entidades |
+| `migration:run:prod` | Migraciones desde `dist` (en producción también corren al arrancar) |
+| `test` | Pruebas unitarias |
+| `test:e2e` | Pruebas e2e: necesitan un Postgres; la base `E2E_DB_NAME` (por defecto `botbite_test`) **se borra** en cada corrida |
+| `lint` | ESLint + Prettier |
 
-# production mode
-$ npm run start:prod
+## Variables de entorno
+
+Ver [.env.template](.env.template). Se validan al arrancar ([src/config/env.validation.ts](src/config/env.validation.ts)); la app no inicia si falta alguna obligatoria. Importantes en producción:
+
+- `JWT_SECRET` y `JWT_REFRESH_SECRET`: distintos y de al menos 32 caracteres.
+- `CORS_ORIGINS`: orígenes del panel web (aplica también a los WebSockets).
+- `TRUST_PROXY`: número de proxies delante de la API.
+- `TWILIO_VALIDATE_SIGNATURE=true`. Si la firma falla detrás de un proxy, define `TWILIO_WEBHOOK_BASE_URL` con la URL pública exacta configurada en Twilio.
+- `DB_SSL` / `DB_SSL_REJECT_UNAUTHORIZED` / `DB_SSL_CA`: el certificado de la base se verifica por defecto.
+
+## Arquitectura
+
+```
+src/
+├── core/        # auth (JWT, guards, @Auth) y control de acceso por restaurante
+├── common/      # traducciones, utilidades, subida de archivos, adaptador de Socket.IO
+├── config/      # configuración tipada y validación del entorno
+├── database/    # conexión, data source de la CLI y migraciones
+└── modules/     # auth, users, restaurants, branches, products, categories,
+                 # menus, orders, customers, messages (bot), openai, health
 ```
 
-## Run tests
+### Flujo del bot
 
-```bash
-# unit tests
-$ npm run test
+1. Twilio llama al webhook → se valida la firma → el mensaje se encola y se
+   responde de inmediato (los reintentos de Twilio se descartan por `MessageSid`).
+2. Los mensajes de cada cliente se procesan en orden: QR de la mesa → idioma →
+   ubicación → flujo principal (menú, pedidos, info/fotos, recomendaciones,
+   amenidades, cuenta).
+3. Caja recibe avisos por WhatsApp y en el panel (Socket.IO, namespace `/orders`).
 
-# e2e tests
-$ npm run test:e2e
+La cola es en memoria (una sola instancia). Para escalar horizontalmente hay que
+moverla, junto con los límites de peticiones, a Redis/BullMQ.
 
-# test coverage
-$ npm run test:cov
+### Permisos
+
+- `super` / `admin`: todos los restaurantes. Solo ellos asignan créditos de
+  mensajes y activan/desactivan restaurantes, sucursales y productos.
+- `client`: solo los restaurantes de los que es dueño.
+- `user`: hoy no está vinculado a ningún restaurante, por lo que no accede a
+  datos de restaurantes.
+
+### WebSocket
+
+La conexión al namespace `/orders` requiere el access token:
+
+```ts
+io(`${apiUrl}/orders`, { auth: { token: accessToken } });
 ```
-
-## Deployment
-
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
-
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
-
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
-
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
-
-## License
-
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
