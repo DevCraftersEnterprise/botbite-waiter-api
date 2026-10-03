@@ -1,39 +1,14 @@
 services:
   db:
-    image: postgres:16.3    
+    image: postgres:16.3
     restart: no
+    # Solo accesible desde la máquina local.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_USER: ${DB_USERNAME}
       POSTGRES_DB: ${DB_NAME}
-    container_name: botbite-waiter-app
+    container_name: botbite-waiter-api
     volumes:
       - ./postgres:/var/lib/postgresql/data
-    networks:
-      - botbite-network
-
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    container_name: botbite-redis
-    command: redis-server --appendonly yes
-    volumes:
-      - redis-data:/data
-    networks:
-      - botbite-network
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 3
-
-networks:
-  botbite-network:
-    driver: bridge
-
-volumes:
-  redis-data:

@@ -1,6 +1,6 @@
 import { join } from 'path';
 import * as QRCode from 'qrcode';
-import * as sharp from 'sharp';
+import sharp from 'sharp';
 
 export const createQr = async (
   url: string,
@@ -21,7 +21,7 @@ export const createQr = async (
   });
 
   // 2. Cargar logo con padding blanco
-  const logoPath = join(process.cwd(), 'assets', 'logo.jpeg');
+  const logoPath = join(__dirname, '..', '..', '..', 'assets', 'logo.jpeg');
   const logoPadded = await sharp(logoPath)
     .resize(logoSize - 20, logoSize - 20, {
       fit: 'contain',

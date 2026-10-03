@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { TranslationService } from './services/translation.service';
+import { TranslationService } from '@/common/services/translation.service';
 // import { CacheService } from './services/cache.service'; // ⚠️ Cache deshabilitado
 import { ConfigModule } from '@nestjs/config';
 
@@ -14,4 +14,4 @@ import { ConfigModule } from '@nestjs/config';
     // CacheService, // ⚠️ Cache deshabilitado
   ],
 })
-export class CommonModule { }
+export class CommonModule {}

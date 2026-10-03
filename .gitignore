@@ -2,7 +2,6 @@
 /dist
 /node_modules
 /build
-/postgres
 
 # Logs
 logs
@@ -47,9 +46,6 @@ lerna-debug.log*
 .temp
 .tmp
 
-# Documentation (sensitive)
-SCALING-PLAN.md
-
 # Runtime data
 pids
 *.pid
@@ -59,12 +55,5 @@ pids
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
-# Ignorar el archivo de escalabilidad
-ARCHITECTURE.md
-DEPLOYMENT-CHECKLIST.md
-MONITORING.md
-QUICK-START.md
-REDIS-ALTERNATIVES.md
-REDIS-IMPLEMENTATION-SUMMARY.md
-REDIS-SETUP.md
-SCALABILITY.md
+# Datos locales de Postgres (docker-compose)
+/postgres

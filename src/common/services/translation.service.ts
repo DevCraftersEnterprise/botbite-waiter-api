@@ -1,10 +1,14 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import * as fs from 'fs';
 import * as path from 'path';
+import { errorMessage } from '@/common/utils/error.util';
+
+type TranslationTree = { [key: string]: string | TranslationTree };
 
 @Injectable()
 export class TranslationService {
-  private readonly translation: Record<string, any> = {};
+  private readonly logger = new Logger(TranslationService.name);
+  private readonly translation: Record<string, TranslationTree> = {};
 
   constructor() {
     this.loadTranslations();
@@ -15,8 +19,9 @@ export class TranslationService {
 
     for (const lang of langs) {
       const filePath = path.join(
-        process.cwd(),
-        'src',
+        __dirname,
+        '..',
+        '..',
         'i18n',
         lang,
         'translation.json',
@@ -24,10 +29,11 @@ export class TranslationService {
 
       try {
         const data = fs.readFileSync(filePath, 'utf-8');
-        this.translation[lang] = JSON.parse(data);
+        this.translation[lang] = JSON.parse(data) as TranslationTree;
       } catch (err) {
-        console.log(err);
-        console.warn(`⚠️ No se pudo cargar traducciones para '${lang}'`);
+        this.logger.warn(
+          `No se pudieron cargar las traducciones de '${lang}': ${errorMessage(err)}`,
+        );
       }
     }
   }
@@ -37,15 +43,21 @@ export class TranslationService {
     lang: string = 'es',
     variables?: Record<string, string>,
   ): string {
-    const keys = key.split('.');
-    let result = this.translation[lang];
+    // Idiomas sin archivo propio caen a español en lugar de devolver la clave.
+    let result: string | TranslationTree | undefined =
+      this.translation[lang] ?? this.translation.es;
 
-    for (const key of keys) {
-      if (result && result[key]) result = result[key];
-      else return key;
+    for (const part of key.split('.')) {
+      if (result && typeof result === 'object' && result[part]) {
+        result = result[part];
+      } else {
+        return key;
+      }
     }
 
-    if (typeof result === 'string' && variables) {
+    if (typeof result !== 'string') return key;
+
+    if (variables) {
       for (const [varName, value] of Object.entries(variables)) {
         const pattern = new RegExp(`{{\\s*${varName}\\s*}}`, 'g');
         result = result.replace(pattern, value);

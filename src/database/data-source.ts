@@ -1,25 +1,15 @@
-import { DataSource } from 'typeorm';
+import 'reflect-metadata';
 import { config } from 'dotenv';
+import { join } from 'path';
+import { DataSource } from 'typeorm';
+import configuration from '../config/configuration';
+import { buildDataSourceOptions, SOURCE_EXTENSION } from './database.config';
 
+// Usado solo por la CLI de TypeORM (migraciones). Usa rutas relativas porque
+// la CLI no resuelve los alias `@/` en este archivo de entrada.
 config();
 
-export const AppDataSource = new DataSource({
-  type: 'postgres',
-  host: process.env.DB_HOST,
-  port: Number(process.env.DB_PORT),
-  username: process.env.DB_USERNAME,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  ssl: process.env.NODE_ENV === 'production' ? true : false,
-  extra: {
-    ssl:
-      process.env.NODE_ENV === 'production'
-        ? { rejectUnauthorized: false }
-        : null,
-    timezone: 'UTC', // Forzar UTC en PostgreSQL
-  },
-  synchronize: false,
-  entities: ['src/**/*.entity.ts'],
-  migrations: ['src/database/migrations/*.ts'],
-  migrationsTableName: 'migrations',
+export default new DataSource({
+  ...buildDataSourceOptions(configuration().database),
+  entities: [join(__dirname, '..', '**', `*.entity${SOURCE_EXTENSION}`)],
 });

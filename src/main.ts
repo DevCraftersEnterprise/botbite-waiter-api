@@ -1,31 +1,21 @@
+import { AppModule } from '@/app.module';
+import { configureApp } from '@/app.setup';
+import { Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
-import { Logger, ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 
 async function bootstrap() {
-  const logger = new Logger('MainLogger');
-
-  const app = await NestFactory.create(AppModule);
-
-  app.setGlobalPrefix('v1');
-  app.enableCors();
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
-
-  app.use((req, res, next) => {
-    req.setTimeout(60000);
-    next();
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
   });
 
-  const PORT = process.env.PORT ?? 3000;
+  configureApp(app);
 
-  await app.listen(PORT);
+  const port = app.get(ConfigService).getOrThrow<number>('app.port');
+  await app.listen(port);
 
-  logger.log(`Application is running on port: ${PORT} `);
+  new Logger('Bootstrap').log(`Application is running on port ${port}`);
 }
-bootstrap();
+
+void bootstrap();

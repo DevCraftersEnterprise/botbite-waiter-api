@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddPreferredLanguageToConversations1769970137656
-  implements MigrationInterface
-{
+export class AddPreferredLanguageToConversations1769970137656 implements MigrationInterface {
   name = 'AddPreferredLanguageToConversations1769970137656';
 
   public async up(queryRunner: QueryRunner): Promise<void> {

@@ -1,112 +1,95 @@
-<p align="center">
-  <img src="/assets/logo-removebg-preview.png" width="180" alt="BotBite Logo" />
-</p>
+# BotBite Waiter API
 
-# BotBite API
+API de BotBite: mesero virtual por WhatsApp (Twilio) para restaurantes, más el
+backend del panel web (restaurantes, sucursales, productos, menús, pedidos y
+notificaciones de caja en tiempo real).
 
-API para gestión de restaurantes, sucursales, productos, usuarios y catálogos globales.
+Stack: NestJS 11 · TypeORM · PostgreSQL · Socket.IO · Twilio · OpenAI · Cloudinary.
 
-## Instalación
+## Puesta en marcha
 
 ```bash
 npm install
-```
-
-## Estructura del proyecto
-
-La carpeta principal del código fuente es `src/` y está organizada en módulos funcionales:
-
-| Carpeta          | Descripción                                                                                         |
-| ---------------- | --------------------------------------------------------------------------------------------------- |
-| **auth/**        | Autenticación y autorización JWT, guards, decoradores y estrategias                                 |
-| **branches/**    | Sucursales de restaurantes: CRUD, activación, carga masiva CSV, QR, relación con restaurante        |
-| **categories/**  | Catálogo global de categorías: CRUD, solo admin/super                                               |
-| **common/**      | Entidades base, paginación, traducción, decoradores y utilidades compartidas                        |
-| **customers/**   | Clientes: CRUD, validación de unicidad, relación con órdenes                                        |
-| **menus/**       | Menús de sucursal: CRUD de menús y items, relación con productos y categorías                       |
-| **orders/**      | Órdenes: CRUD, relación con clientes, sucursales y productos, gestión de items de orden            |
-| **products/**    | Productos de restaurante: CRUD, carga masiva CSV, activación, relación con restaurante y categorías |
-| **restaurants/** | Restaurantes: CRUD, activación, relación con usuario y sucursales                                   |
-| **users/**       | Usuarios: registro, login, roles, CRUD, relación con restaurantes                                   |
-
-## Migraciones de base de datos
-
-El proyecto utiliza TypeORM para la gestión de migraciones. Las migraciones se encuentran en `src/database/migrations/`.
-
-### Crear una nueva migración
-
-```bash
-npm run migration:generate src/database/migrations/NombreDeLaMigracion
-```
-
-### Aplicar las migraciones pendientes
-
-```bash
+cp .env.template .env        # y completa los valores
+docker compose up -d db      # Postgres local (opcional)
 npm run migration:run
-```
-
-### Revertir la última migración
-
-```bash
-npm run migration:revert
-```
-
-> **Nota:** Asegúrate de tener configuradas las variables de entorno de la base de datos antes de ejecutar migraciones.
-
-## Ejecutar el proyecto
-
-```bash
-# desarrollo
-npm run start
-
-# modo watch
 npm run start:dev
-
-# producción
-npm run start:prod
 ```
 
-## Pruebas
+API en `http://localhost:3000/v1`. El webhook de Twilio debe apuntar a
+`https://<tu-dominio>/v1/messages/webhook`.
 
-```bash
-# unit tests
-npm run test
+## Scripts
 
-# e2e tests
-npm run test:e2e
+| Script | Uso |
+| --- | --- |
+| `start:dev` | Desarrollo con recarga |
+| `build` / `start:prod` | Compilar y ejecutar `dist` |
+| `migration:run` / `migration:revert` | Migraciones desde `src` (ts-node) |
+| `migration:generate -- src/database/migrations/Nombre` | Generar migración a partir de las entidades |
+| `migration:run:prod` | Migraciones desde `dist` (en producción también corren al arrancar) |
+| `test` | Pruebas unitarias |
+| `test:e2e` | Pruebas e2e: necesitan un Postgres; la base `E2E_DB_NAME` (por defecto `botbite_test`) **se borra** en cada corrida |
+| `lint` | ESLint + Prettier |
 
-# test coverage
-npm run test:cov
+## Variables de entorno
+
+Ver [.env.template](.env.template). Se validan al arrancar ([src/config/env.validation.ts](src/config/env.validation.ts)); la app no inicia si falta alguna obligatoria. Importantes en producción:
+
+- `JWT_SECRET` y `JWT_REFRESH_SECRET`: distintos y de al menos 32 caracteres.
+- `CORS_ORIGINS`: orígenes del panel web (aplica también a los WebSockets).
+- `TRUST_PROXY`: número de proxies delante de la API.
+- `TWILIO_VALIDATE_SIGNATURE=true`. Si la firma falla detrás de un proxy, define `TWILIO_WEBHOOK_BASE_URL` con la URL pública exacta configurada en Twilio.
+- `DB_SSL` / `DB_SSL_REJECT_UNAUTHORIZED` / `DB_SSL_CA`: el certificado de la base se verifica por defecto.
+
+## Arquitectura
+
+```
+src/
+├── core/        # auth (JWT, guards, @Auth) y control de acceso por restaurante
+├── common/      # traducciones, utilidades, subida de archivos, adaptador de Socket.IO
+├── config/      # configuración tipada y validación del entorno
+├── database/    # conexión, data source de la CLI y migraciones
+└── modules/     # auth, users, restaurants, branches, products, categories,
+                 # menus, orders, customers, messages (bot), openai, health
 ```
 
-## ¿Cómo hacer merge de una rama feature a main?
+### Flujo del bot
 
-Sigue estos pasos para fusionar tu rama de desarrollo (feature) a `main`:
+1. Twilio llama al webhook → se valida la firma → el mensaje se encola y se
+   responde de inmediato (los reintentos de Twilio se descartan por `MessageSid`).
+2. Los mensajes de cada cliente se procesan en orden: QR de la mesa → idioma →
+   ubicación → flujo principal (menú, pedidos, info/fotos, recomendaciones,
+   amenidades, cuenta).
+3. Caja recibe avisos por WhatsApp y en el panel (Socket.IO, namespace `/orders`).
 
-```bash
-# 1. Guarda tus cambios y haz commit (si falta)
-git add .
-git commit -m "feat: describe tu cambio principal"
+La cola es en memoria (una sola instancia). Para escalar horizontalmente hay que
+moverla, junto con los límites de peticiones, a Redis/BullMQ.
 
-# 2. Cambia a la rama main
-git checkout main
+### Permisos
 
-# 3. Trae los últimos cambios de remoto
-git pull origin main
+- `super` / `admin`: todos los restaurantes. Solo ellos asignan créditos de
+  mensajes y activan/desactivan restaurantes, sucursales y productos.
+- `client`: solo los restaurantes de los que es dueño.
+- `user` (cajeros y meseros): solo las sucursales que tiene asignadas, en
+  modo lectura: restaurantes y sucursales, pedidos, conversaciones y
+  notificaciones (que sí puede marcar como atendidas), además del WebSocket
+  de su sucursal. No modifica nada más.
 
-# 4. Haz el merge de tu rama feature (ajusta el nombre si es diferente)
-git merge nombre-de-tu-rama
+El dueño (o un admin) asigna al personal a una sucursal por email:
 
-# 5. Sube los cambios a remoto
-git push origin main
+| Método | Ruta | Uso |
+| --- | --- | --- |
+| `GET` | `/v1/branches/:restaurantId/:branchId/staff` | Listar personal |
+| `POST` | `/v1/branches/:restaurantId/:branchId/staff` | Asignar (`{ "email": "..." }`, cuenta con rol `user`) |
+| `DELETE` | `/v1/branches/:restaurantId/:branchId/staff/:userId` | Quitar |
 
-# 6. Borra la rama local y remota (opcional)
-git branch -d nombre-de-tu-rama
-git push origin --delete nombre-de-tu-rama
+Las cuentas `user` las crea un admin con `POST /v1/users/register-user`.
+
+### WebSocket
+
+La conexión al namespace `/orders` requiere el access token:
+
+```ts
+io(`${apiUrl}/orders`, { auth: { token: accessToken } });
 ```
-
-> **Recuerda:** Resuelve cualquier conflicto que aparezca durante el merge antes de hacer push.
-
-## Licencia
-
-BotBite API es un proyecto open source bajo licencia MIT.
