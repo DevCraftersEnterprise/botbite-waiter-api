@@ -491,6 +491,99 @@ describe('BotBite API (e2e)', () => {
     });
   });
 
+  describe('concurrency', () => {
+    const DINERS = 10;
+    const phones = Array.from(
+      { length: DINERS },
+      (_, i) => `+5215533330${String(i).padStart(3, '0')}`,
+    );
+
+    const repliesTo = (phone: string) =>
+      (sendSpy.mock.calls as [string][]).filter(([to]) => to === phone).length;
+
+    const waitUntil = async (condition: () => boolean, label: string) => {
+      const start = Date.now();
+      while (!condition()) {
+        if (Date.now() - start > 15_000) throw new Error(`Timed out: ${label}`);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    };
+
+    /** Todos los comensales envían el mismo mensaje a la vez. */
+    const everybodySends = async (body: string) => {
+      const before = phones.map(repliesTo);
+      const responses = await Promise.all(
+        phones.map((phone) => sendWhatsapp(body, phone)),
+      );
+      responses.forEach((res) => expect(res.status).toBe(200));
+      await waitUntil(
+        () => phones.every((phone, i) => repliesTo(phone) > before[i]),
+        `replies to "${body}"`,
+      );
+    };
+
+    it(`serves ${DINERS} diners ordering at the same time in one branch`, async () => {
+      const orders = dataSource.getRepository(Order);
+      const ordersBefore = await orders.countBy({ branchId: seed.branchA.id });
+      const creditsBefore = await branchCredits(dataSource, seed.branchA.id);
+      const start = Date.now();
+
+      await everybodySends(`🛡️ INICIO ${QR_TOKEN}`);
+      await everybodySends('Español');
+      await everybodySends('mesa 7');
+      await everybodySends('quiero 2 tacos al pastor');
+      await everybodySends('si');
+      await everybodySends('la cuenta');
+
+      const elapsed = Date.now() - start;
+
+      // Cada comensal tiene su pedido completo, sin mezclarse con los demás.
+      const created = await orders.find({
+        where: { branchId: seed.branchA.id },
+        relations: { orderItems: true },
+        order: { createdAt: 'DESC' },
+        take: DINERS,
+      });
+      expect(
+        (await orders.countBy({ branchId: seed.branchA.id })) - ordersBefore,
+      ).toBe(DINERS);
+      created.forEach((order) => {
+        expect(Number(order.total)).toBe(50);
+        expect(order.orderItems).toHaveLength(2);
+      });
+      expect(new Set(created.map((order) => order.customerId)).size).toBe(
+        DINERS,
+      );
+
+      // El descuento de créditos es atómico: no se pierde ninguno.
+      expect(await branchCredits(dataSource, seed.branchA.id)).toBe(
+        creditsBefore - 3 * DINERS,
+      );
+
+      // 6 mensajes por comensal (60 en total) con Twilio simulado.
+      expect(elapsed).toBeLessThan(15_000);
+    });
+
+    it('keeps the order of a burst of messages from the same diner', async () => {
+      const phone = '+5215544440001';
+
+      // Se envían seguidos, sin esperar las respuestas del bot.
+      for (const body of [
+        `🛡️ INICIO ${QR_TOKEN}`,
+        'Español',
+        'mesa 9',
+        'quiero 1 taco al pastor',
+      ]) {
+        await sendWhatsapp(body, phone).expect(200);
+      }
+
+      await waitUntil(() => repliesTo(phone) >= 4, 'burst replies');
+
+      // Si se hubieran procesado fuera de orden, el último paso no llegaría al carrito.
+      expect(lastReplyTo(phone)).toMatch(/TACO/i);
+    });
+  });
+
   describe('WebSocket', () => {
     const connect = (token?: string) =>
       new Promise<Socket>((resolve, reject) => {
