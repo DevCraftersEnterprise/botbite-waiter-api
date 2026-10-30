@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThan, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 import { CreateBranchDto } from '@/modules/branches/dto/create-branch.dto';
 import { UpdateBranchDto } from '@/modules/branches/dto/update-branch.dto';
@@ -130,19 +130,5 @@ export class BranchesService {
       restaurantId,
       lang,
     );
-  }
-
-  /**
-   * Descuenta un crédito de mensaje de forma atómica. Devuelve false si la
-   * sucursal ya no tenía saldo (así nunca queda en negativo ni se pierden
-   * descuentos con mensajes concurrentes).
-   */
-  async consumeMessageCredit(branchId: string): Promise<boolean> {
-    const result = await this.branchRepository.decrement(
-      { id: branchId, availableMessages: MoreThan(0) },
-      'availableMessages',
-      1,
-    );
-    return (result.affected ?? 0) > 0;
   }
 }

@@ -15,9 +15,6 @@ export class Order extends BaseEntity {
   @Column()
   branchId: string;
 
-  @Column({ type: 'int', default: 0 })
-  interactions: number;
-
   @ManyToOne(() => Customer)
   @JoinColumn({ name: 'customerId' })
   customer: Customer;

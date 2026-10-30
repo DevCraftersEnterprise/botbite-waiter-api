@@ -73,8 +73,8 @@ export class OrdersService {
   }
 
   /**
-   * Crea un pedido con todos sus items y el total en una sola transacción
-   * (lo usa el bot al cerrar la cuenta). En v1 se hacían 1 + N + 1 consultas
+   * Crea un pedido con todos sus items y el total en una sola transacción.
+   * En v1 se hacían 1 + N + 1 consultas
    * sueltas, una por cada unidad, y un fallo a medias dejaba pedidos
    * incompletos.
    */

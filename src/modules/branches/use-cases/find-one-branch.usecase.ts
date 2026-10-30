@@ -59,7 +59,6 @@ export class FindOneBranchUseCase {
         surveyUrl: true,
         qrUrl: true,
         qrToken: true,
-        availableMessages: true,
         restaurantId: true,
         restaurant: {
           id: true,

@@ -17,8 +17,7 @@ import { CategoriesModule } from '@/modules/categories/categories.module';
 import { CustomersModule } from '@/modules/customers/customers.module';
 import { HealthModule } from '@/modules/health/health.module';
 import { MenusModule } from '@/modules/menus/menus.module';
-import { MessagesModule } from '@/modules/messages/messages.module';
-import { OpenAIModule } from '@/modules/openai/openai.module';
+import { NotificationsModule } from '@/modules/notifications/notifications.module';
 import { OrdersModule } from '@/modules/orders/orders.module';
 import { ProductsModule } from '@/modules/products/products.module';
 import { RestaurantsModule } from '@/modules/restaurants/restaurants.module';
@@ -69,8 +68,7 @@ import { UsersModule } from '@/modules/users/users.module';
     MenusModule,
     OrdersModule,
     CustomersModule,
-    OpenAIModule,
-    MessagesModule,
+    NotificationsModule,
     HealthModule,
   ],
   providers: [

@@ -11,7 +11,7 @@ import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { BranchStaff } from '@/modules/branches/entities/branch-staff.entity';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
-import { CashierNotification } from '@/modules/messages/entities/cashier-notifications.entity';
+import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';

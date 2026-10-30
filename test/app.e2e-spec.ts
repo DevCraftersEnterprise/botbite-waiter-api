@@ -4,27 +4,24 @@ import * as argon2 from 'argon2';
 import { AddressInfo } from 'net';
 import { io, Socket } from 'socket.io-client';
 import request from 'supertest';
-import { getExpectedTwilioSignature } from 'twilio/lib/webhooks/webhooks';
 import { DataSource } from 'typeorm';
 import { AppModule } from '@/app.module';
 import { configureApp } from '@/app.setup';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { Category } from '@/modules/categories/entities/category.entity';
+import { Customer } from '@/modules/customers/entities/customer.entity';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
-import { TwilioService } from '@/modules/messages/services/twilio.service';
-import { Order } from '@/modules/orders/entities/order.entity';
+import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
 import { User } from '@/modules/users/entities/user.entity';
 
 const PASSWORD = 'Sup3r-secret!';
-const WEBHOOK_PATH = '/v1/messages/webhook';
 const ASSISTANT_PHONE = '+5215511110001';
 const RECEPTION_PHONE = '+5215511110002';
 const CUSTOMER_PHONE = '+5215522220001';
-const QR_TOKEN = 'QR-1700000000000-0123456789abcdef0123456789abcdef';
 
 interface Seed {
   superUser: User;
@@ -34,15 +31,16 @@ interface Seed {
   branchA: Branch;
   restaurantB: Restaurant;
   branchB: Branch;
+  customer: Customer;
+  menuItem: MenuItem;
+  notification: CashierNotification;
 }
 
 describe('BotBite API (e2e)', () => {
   let app: NestExpressApplication;
   let dataSource: DataSource;
   let seed: Seed;
-  let sendSpy: jest.SpyInstance;
   let baseUrl: string;
-  let sidCounter = 0;
 
   const http = () => request(app.getHttpServer());
 
@@ -56,48 +54,14 @@ describe('BotBite API (e2e)', () => {
 
   const auth = (token: string) => ({ Authorization: `Bearer ${token}` });
 
-  /** Envía un webhook firmado como lo haría Twilio. */
-  const sendWhatsapp = (body: string, from = CUSTOMER_PHONE, sid?: string) => {
-    const params = {
-      MessageSid: sid ?? `SM${++sidCounter}`,
-      AccountSid: process.env.TWILIO_ACCOUNT_SID!,
-      From: `whatsapp:${from}`,
-      To: `whatsapp:${ASSISTANT_PHONE}`,
-      Body: body,
-      ProfileName: 'Ana',
-      NumMedia: '0',
-      // Campo extra que Twilio siempre envía y la API no usa.
-      SmsStatus: 'received',
-    };
-    const signature = getExpectedTwilioSignature(
-      process.env.TWILIO_AUTH_TOKEN!,
-      `${process.env.TWILIO_WEBHOOK_BASE_URL}${WEBHOOK_PATH}`,
-      params,
-    );
-    return http()
-      .post(WEBHOOK_PATH)
-      .set('X-Twilio-Signature', signature)
-      .type('form')
-      .send(params);
-  };
-
-  /** Espera a que el bot (asíncrono) envíe `count` mensajes nuevos. */
-  const waitForReplies = async (count: number) => {
-    const target = sendSpy.mock.calls.length + count;
-    const start = Date.now();
-    while (sendSpy.mock.calls.length < target) {
-      if (Date.now() - start > 10_000) {
-        throw new Error(`Timed out waiting for ${count} replies`);
-      }
-      await new Promise((resolve) => setTimeout(resolve, 25));
+  /** Reutiliza la sesión: el login está limitado a 20 por minuto por IP. */
+  const sessions = new Map<string, string>();
+  const tokenFor = async (email: string) => {
+    if (!sessions.has(email)) {
+      sessions.set(email, (await login(email)).access_token);
     }
-    return sendSpy.mock.calls.slice(-count) as [string, string, string][];
+    return sessions.get(email)!;
   };
-
-  const lastReplyTo = (phone: string) =>
-    [...(sendSpy.mock.calls as [string, string][])]
-      .reverse()
-      .find(([to]) => to === phone)?.[1] ?? '';
 
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
@@ -115,10 +79,6 @@ describe('BotBite API (e2e)', () => {
 
     await app.listen(0);
     baseUrl = `http://localhost:${(app.getHttpServer().address() as AddressInfo).port}`;
-
-    sendSpy = jest
-      .spyOn(app.get(TwilioService), 'sendWhatsAppMessage')
-      .mockResolvedValue({ sid: 'SMout' } as never);
 
     seed = await seedData(dataSource);
   });
@@ -230,24 +190,15 @@ describe('BotBite API (e2e)', () => {
         .expect(403);
     });
 
-    it('a client cannot give itself message credits; an admin can', async () => {
-      const client = await login(seed.clientA.email);
-      const url = `/v1/branches/restaurant/${seed.restaurantA.id}/${seed.branchA.id}`;
-
+    it('no longer accepts message credits', async () => {
+      const { access_token } = await login(seed.superUser.email);
       await http()
-        .patch(url)
-        .set(auth(client.access_token))
-        .send({ availableMessages: 1000 })
-        .expect(403);
-
-      const admin = await login(seed.superUser.email);
-      const res = await http()
-        .patch(url)
-        .set(auth(admin.access_token))
+        .patch(
+          `/v1/branches/restaurant/${seed.restaurantA.id}/${seed.branchA.id}`,
+        )
+        .set(auth(access_token))
         .send({ availableMessages: 5 })
-        .expect(200);
-
-      expect(res.body.branch.availableMessages).toBe(105);
+        .expect(400);
     });
 
     it('a branch id from another restaurant is not found through this restaurant', async () => {
@@ -355,7 +306,7 @@ describe('BotBite API (e2e)', () => {
         .set(auth(staffToken))
         .expect(200);
       await http()
-        .get(`/v1/messages/notifications?branchId=${seed.branchA.id}`)
+        .get(`/v1/notifications?branchId=${seed.branchA.id}`)
         .set(auth(staffToken))
         .expect(200);
 
@@ -402,185 +353,87 @@ describe('BotBite API (e2e)', () => {
     });
   });
 
-  describe('WhatsApp webhook', () => {
-    it('rejects unsigned requests', async () => {
-      await http()
-        .post(WEBHOOK_PATH)
-        .type('form')
+  describe('orders', () => {
+    it('creates an order with its items', async () => {
+      const token = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .post('/v1/orders')
+        .set(auth(token))
         .send({
-          MessageSid: 'SMx',
-          AccountSid: 'AC',
-          From: 'x',
-          To: 'y',
-          Body: 'hola',
+          branchId: seed.branchA.id,
+          customerId: seed.customer.id,
+          orderItems: [{ menuItemId: seed.menuItem.id, price: 25 }],
         })
-        .expect(403);
-    });
+        .expect(201);
 
-    it('serves a full order: QR → language → table → order → confirm → bill', async () => {
-      const creditsBefore = await branchCredits(dataSource, seed.branchA.id);
-
-      await sendWhatsapp('hola').expect(200);
-      expect((await waitForReplies(1))[0][1]).toContain('QR');
-
-      await sendWhatsapp(`🛡️ INICIO ${QR_TOKEN}`).expect(200);
-      expect((await waitForReplies(1))[0][1]).toContain('Español');
-
-      await sendWhatsapp('Español').expect(200);
-      await waitForReplies(1);
-
-      await sendWhatsapp('mesa 5').expect(200);
-      await waitForReplies(1);
-
-      await sendWhatsapp('quiero 2 tacos al pastor').expect(200);
-      await waitForReplies(1);
-      expect(lastReplyTo(CUSTOMER_PHONE)).toMatch(/TACO/i);
-
-      await sendWhatsapp('si').expect(200);
-      // Respuesta al cliente + aviso a caja.
-      await waitForReplies(2);
-      expect(lastReplyTo(RECEPTION_PHONE)).toContain('mesa 5');
-
-      await sendWhatsapp('la cuenta por favor').expect(200);
-      await waitForReplies(2);
-
-      const orders = await dataSource.getRepository(Order).find({
-        where: { branchId: seed.branchA.id },
-        relations: { orderItems: true },
-      });
-      expect(orders).toHaveLength(1);
-      expect(Number(orders[0].total)).toBe(50);
-      expect(orders[0].orderItems).toHaveLength(2);
-
-      // Se consumió un crédito por cada respuesta del flujo principal.
-      expect(await branchCredits(dataSource, seed.branchA.id)).toBe(
-        creditsBefore - 3,
-      );
-    });
-
-    it('processes a retried webhook only once', async () => {
-      const sid = 'SM-duplicate';
-      await sendWhatsapp('hola', '+5215522229999', sid).expect(200);
-      await waitForReplies(1);
-      const calls = sendSpy.mock.calls.length;
-
-      await sendWhatsapp('hola', '+5215522229999', sid).expect(200);
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(sendSpy.mock.calls.length).toBe(calls);
-    });
-
-    it('ignores messages pretending to come from an unknown Twilio account', async () => {
-      const params = {
-        MessageSid: 'SM-foreign',
-        AccountSid: 'AC11111111111111111111111111111111',
-        From: `whatsapp:${CUSTOMER_PHONE}`,
-        To: `whatsapp:${ASSISTANT_PHONE}`,
-        Body: 'hola',
-      };
-      const signature = getExpectedTwilioSignature(
-        process.env.TWILIO_AUTH_TOKEN!,
-        `${process.env.TWILIO_WEBHOOK_BASE_URL}${WEBHOOK_PATH}`,
-        params,
-      );
-      await http()
-        .post(WEBHOOK_PATH)
-        .set('X-Twilio-Signature', signature)
-        .type('form')
-        .send(params)
-        .expect(403);
+      expect(Number(res.body.order.total)).toBe(25);
     });
   });
 
-  describe('concurrency', () => {
-    const DINERS = 10;
-    const phones = Array.from(
-      { length: DINERS },
-      (_, i) => `+5215533330${String(i).padStart(3, '0')}`,
-    );
+  describe('notifications', () => {
+    const listUrl = () => `/v1/notifications?branchId=${seed.branchA.id}`;
+    const itemUrl = (action: string) =>
+      `/v1/notifications/${seed.notification.id}/${action}`;
 
-    const repliesTo = (phone: string) =>
-      (sendSpy.mock.calls as [string][]).filter(([to]) => to === phone).length;
-
-    const waitUntil = async (condition: () => boolean, label: string) => {
-      const start = Date.now();
-      while (!condition()) {
-        if (Date.now() - start > 15_000) throw new Error(`Timed out: ${label}`);
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      }
-    };
-
-    /** Todos los comensales envían el mismo mensaje a la vez. */
-    const everybodySends = async (body: string) => {
-      const before = phones.map(repliesTo);
-      const responses = await Promise.all(
-        phones.map((phone) => sendWhatsapp(body, phone)),
-      );
-      responses.forEach((res) => expect(res.status).toBe(200));
-      await waitUntil(
-        () => phones.every((phone, i) => repliesTo(phone) > before[i]),
-        `replies to "${body}"`,
-      );
-    };
-
-    it(`serves ${DINERS} diners ordering at the same time in one branch`, async () => {
-      const orders = dataSource.getRepository(Order);
-      const ordersBefore = await orders.countBy({ branchId: seed.branchA.id });
-      const creditsBefore = await branchCredits(dataSource, seed.branchA.id);
-      const start = Date.now();
-
-      await everybodySends(`🛡️ INICIO ${QR_TOKEN}`);
-      await everybodySends('Español');
-      await everybodySends('mesa 7');
-      await everybodySends('quiero 2 tacos al pastor');
-      await everybodySends('si');
-      await everybodySends('la cuenta');
-
-      const elapsed = Date.now() - start;
-
-      // Cada comensal tiene su pedido completo, sin mezclarse con los demás.
-      const created = await orders.find({
-        where: { branchId: seed.branchA.id },
-        relations: { orderItems: true },
-        order: { createdAt: 'DESC' },
-        take: DINERS,
-      });
-      expect(
-        (await orders.countBy({ branchId: seed.branchA.id })) - ordersBefore,
-      ).toBe(DINERS);
-      created.forEach((order) => {
-        expect(Number(order.total)).toBe(50);
-        expect(order.orderItems).toHaveLength(2);
-      });
-      expect(new Set(created.map((order) => order.customerId)).size).toBe(
-        DINERS,
+    const activeIds = (body: unknown) =>
+      (body as { active: { id: string }[] }).active.map(
+        (notification) => notification.id,
       );
 
-      // El descuento de créditos es atómico: no se pierde ninguno.
-      expect(await branchCredits(dataSource, seed.branchA.id)).toBe(
-        creditsBefore - 3 * DINERS,
-      );
+    it('lists them only for users with access to the branch', async () => {
+      const token = await tokenFor(seed.clientA.email);
+      const res = await http().get(listUrl()).set(auth(token)).expect(200);
+      expect(activeIds(res.body)).toEqual([seed.notification.id]);
 
-      // 6 mensajes por comensal (60 en total) con Twilio simulado.
-      expect(elapsed).toBeLessThan(15_000);
+      const otherToken = await tokenFor(seed.clientB.email);
+      await http().get(listUrl()).set(auth(otherToken)).expect(403);
     });
 
-    it('keeps the order of a burst of messages from the same diner', async () => {
-      const phone = '+5215544440001';
+    it('marks them as read and unread', async () => {
+      const token = await tokenFor(seed.clientA.email);
 
-      // Se envían seguidos, sin esperar las respuestas del bot.
-      for (const body of [
-        `🛡️ INICIO ${QR_TOKEN}`,
-        'Español',
-        'mesa 9',
-        'quiero 1 taco al pastor',
-      ]) {
-        await sendWhatsapp(body, phone).expect(200);
-      }
+      await http().patch(itemUrl('read')).set(auth(token)).expect(200);
+      const read = await http().get(listUrl()).set(auth(token)).expect(200);
+      expect(activeIds(read.body)).toEqual([]);
 
-      await waitUntil(() => repliesTo(phone) >= 4, 'burst replies');
+      await http().patch(itemUrl('unread')).set(auth(token)).expect(200);
+      const unread = await http().get(listUrl()).set(auth(token)).expect(200);
+      expect(activeIds(unread.body)).toEqual([seed.notification.id]);
+    });
 
-      // Si se hubieran procesado fuera de orden, el último paso no llegaría al carrito.
-      expect(lastReplyTo(phone)).toMatch(/TACO/i);
+    it('another client cannot touch them', async () => {
+      const token = await tokenFor(seed.clientB.email);
+      await http().patch(itemUrl('read')).set(auth(token)).expect(403);
+    });
+
+    it('keeps the previous panel routes while the panel is deployed', async () => {
+      const token = await tokenFor(seed.clientA.email);
+      const branchQuery = `branchId=${seed.branchA.id}`;
+
+      const notifications = await http()
+        .get(`/v1/messages/notifications?${branchQuery}`)
+        .set(auth(token))
+        .expect(200);
+      expect(activeIds(notifications.body)).toEqual([seed.notification.id]);
+
+      const conversations = await http()
+        .get(`/v1/messages/conversations?${branchQuery}`)
+        .set(auth(token))
+        .expect(200);
+      expect(conversations.body).toEqual({ conversations: [], total: 0 });
+
+      await http()
+        .patch(`/v1/messages/${seed.notification.id}/read`)
+        .set(auth(token))
+        .expect(200);
+      await http()
+        .patch(`/v1/messages/${seed.notification.id}/unread`)
+        .set(auth(token))
+        .expect(200);
+    });
+
+    it('the WhatsApp webhook no longer exists', async () => {
+      await http().post('/v1/messages/webhook').send({}).expect(404);
     });
   });
 
@@ -604,8 +457,8 @@ describe('BotBite API (e2e)', () => {
     });
 
     it('only lets users join branches they own', async () => {
-      const { access_token } = await login(seed.clientB.email);
-      const socket = await connect(access_token);
+      const token = await tokenFor(seed.clientB.email);
+      const socket = await connect(token);
 
       const denied = (await socket.emitWithAck(
         'joinBranch',
@@ -624,12 +477,27 @@ describe('BotBite API (e2e)', () => {
       expect(denied.success).toBe(false);
       expect(allowed.success).toBe(true);
     });
+
+    it('pushes notification changes to the branch room', async () => {
+      const token = await tokenFor(seed.clientA.email);
+      const socket = await connect(token);
+      await socket.emitWithAck('joinBranch', seed.branchA.id);
+
+      const received = new Promise<{ branchId: string }>((resolve) => {
+        socket.once('notificationUpdate', resolve);
+      });
+      await http()
+        .patch(`/v1/notifications/${seed.notification.id}/read`)
+        .set(auth(token))
+        .expect(200);
+
+      await expect(received).resolves.toMatchObject({
+        branchId: seed.branchA.id,
+      });
+      socket.close();
+    });
   });
 });
-
-const branchCredits = async (dataSource: DataSource, branchId: string) =>
-  (await dataSource.getRepository(Branch).findOneByOrFail({ id: branchId }))
-    .availableMessages;
 
 async function seedData(dataSource: DataSource): Promise<Seed> {
   const password = await argon2.hash(PASSWORD);
@@ -667,14 +535,11 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
       restaurantId: restaurantA.id,
       phoneNumberAssistant: ASSISTANT_PHONE,
       phoneNumberReception: RECEPTION_PHONE,
-      availableMessages: 100,
-      qrToken: QR_TOKEN,
     }),
     branches.create({
       name: 'Norte',
       address: 'Calle 2',
       restaurantId: restaurantB.id,
-      availableMessages: 10,
     }),
   ]);
 
@@ -691,12 +556,23 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
   const menu = await dataSource
     .getRepository(Menu)
     .save({ name: 'Principal', branchId: branchA.id });
-  await dataSource.getRepository(MenuItem).save({
+  const menuItem = await dataSource.getRepository(MenuItem).save({
     menuId: menu.id,
     productId: product.id,
     categoryId: category.id,
     price: 25,
   });
+
+  const customer = await dataSource
+    .getRepository(Customer)
+    .save({ name: 'Ana', phone: CUSTOMER_PHONE });
+  const notification = await dataSource
+    .getRepository(CashierNotification)
+    .save({
+      branchId: branchA.id,
+      phoneNumber: customer.phone,
+      message: 'La mesa 4 pidió la cuenta',
+    });
 
   return {
     superUser,
@@ -706,5 +582,8 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
     branchA,
     restaurantB,
     branchB,
+    customer,
+    menuItem,
+    notification,
   };
 }

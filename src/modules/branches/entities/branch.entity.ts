@@ -23,9 +23,6 @@ export class Branch extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   surveyUrl: string | null;
 
-  @Column({ type: 'int', default: 0 })
-  availableMessages: number;
-
   @Column({ type: 'varchar', nullable: true })
   qrToken: string | null;
 
