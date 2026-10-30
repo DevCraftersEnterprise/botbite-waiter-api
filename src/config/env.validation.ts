@@ -6,7 +6,6 @@ import {
   IsNumber,
   IsOptional,
   IsString,
-  IsUrl,
   Matches,
   MinLength,
 } from 'class-validator';
@@ -30,10 +29,6 @@ export class EnvironmentVariables {
   @IsNumber()
   @Type(() => Number)
   TRUST_PROXY?: number;
-
-  @IsOptional()
-  @IsUrl({ require_tld: false })
-  FRONTEND_URL?: string;
 
   // Base de datos
   @IsString()
@@ -93,26 +88,6 @@ export class EnvironmentVariables {
   // Servicios externos
   @IsString()
   @IsNotEmpty()
-  OPENAI_API_KEY: string;
-
-  @IsString()
-  @IsNotEmpty()
-  TWILIO_AUTH_TOKEN: string;
-
-  @IsString()
-  @IsNotEmpty()
-  TWILIO_ACCOUNT_SID: string;
-
-  @IsOptional()
-  @IsBooleanString()
-  TWILIO_VALIDATE_SIGNATURE?: string;
-
-  @IsOptional()
-  @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
-  TWILIO_WEBHOOK_BASE_URL?: string;
-
-  @IsString()
-  @IsNotEmpty()
   CLOUDINARY_CLOUD_NAME: string;
 
   @IsString()
@@ -138,14 +113,4 @@ export class EnvironmentVariables {
   @IsNumber()
   @Type(() => Number)
   THROTTLE_LOGIN_LIMIT?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  RATE_LIMIT_TTL?: number;
-
-  @IsOptional()
-  @IsNumber()
-  @Type(() => Number)
-  RATE_LIMIT_MAX?: number;
 }

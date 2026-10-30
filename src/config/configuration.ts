@@ -22,7 +22,6 @@ export default () => {
       // Número de proxies delante de la app (Railway, Render, Nginx...). Necesario
       // para que req.ip y req.protocol sean los del cliente real.
       trustProxy: parseInt(process.env.TRUST_PROXY ?? '1', 10),
-      frontendUrl: process.env.FRONTEND_URL,
     },
     database: {
       host: process.env.DB_HOST,
@@ -48,21 +47,6 @@ export default () => {
       ttlMs: parseInt(process.env.THROTTLE_TTL ?? '60', 10) * 1000,
       limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
       loginLimit: parseInt(process.env.THROTTLE_LOGIN_LIMIT ?? '5', 10),
-    },
-    messages: {
-      rateLimitTtlMs: parseInt(process.env.RATE_LIMIT_TTL ?? '60', 10) * 1000,
-      rateLimitMax: parseInt(process.env.RATE_LIMIT_MAX ?? '10', 10),
-    },
-    openai: {
-      apiKey: process.env.OPENAI_API_KEY,
-    },
-    twilio: {
-      authToken: process.env.TWILIO_AUTH_TOKEN,
-      accountSid: process.env.TWILIO_ACCOUNT_SID,
-      validateSignature: toBool(process.env.TWILIO_VALIDATE_SIGNATURE, true),
-      // URL pública exacta que Twilio llama (p. ej. https://api.botbite.com.mx).
-      // Si no se define se reconstruye a partir de la petición.
-      webhookBaseUrl: process.env.TWILIO_WEBHOOK_BASE_URL,
     },
     cloudinary: {
       cloudName: process.env.CLOUDINARY_CLOUD_NAME,

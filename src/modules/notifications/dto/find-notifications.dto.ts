@@ -1,6 +1,6 @@
 import { IsNotEmpty, IsUUID } from 'class-validator';
 
-export class FindConversationsByBranchDto {
+export class FindNotificationsDto {
   @IsUUID()
   @IsNotEmpty()
   branchId: string;

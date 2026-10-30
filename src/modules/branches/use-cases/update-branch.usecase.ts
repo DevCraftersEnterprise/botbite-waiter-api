@@ -29,37 +29,22 @@ export class UpdateBranchUseCase {
     lang: string,
   ): Promise<BranchResponse> {
     await assertBranchChangesUtil(
-      user,
       updateBranchDto,
       this.branchRepository,
       branchId,
     );
 
-    const { availableMessages, ...changes } = updateBranchDto;
-    const updates: Partial<Branch> = { ...changes };
+    const updates: Partial<Branch> = { ...updateBranchDto };
 
     // Si se quita el número del asistente, el QR deja de servir.
-    if (changes.phoneNumberAssistant === null) {
+    if (updateBranchDto.phoneNumberAssistant === null) {
       updates.qrUrl = null;
       updates.qrToken = null;
     }
 
-    await this.branchRepository.manager.transaction(async (manager) => {
-      if (Object.keys(updates).length > 0) {
-        await manager.update(Branch, { id: branchId }, updates);
-      }
-
-      // Los créditos se SUMAN de forma atómica para no perder mensajes
-      // consumidos en paralelo por el webhook.
-      if (availableMessages !== undefined) {
-        await manager.increment(
-          Branch,
-          { id: branchId },
-          'availableMessages',
-          availableMessages,
-        );
-      }
-    });
+    if (Object.keys(updates).length > 0) {
+      await this.branchRepository.update({ id: branchId }, updates);
+    }
 
     const { branch } = await this.findOneBranchUseCase.execute(
       branchId,
@@ -67,12 +52,7 @@ export class UpdateBranchUseCase {
       restaurantId,
     );
 
-    this.logger.log(
-      `Branch updated: ${branch.id} by user: ${user.id}` +
-        (availableMessages !== undefined
-          ? ` (+${availableMessages} messages, now ${branch.availableMessages})`
-          : ''),
-    );
+    this.logger.log(`Branch updated: ${branch.id} by user: ${user.id}`);
 
     return {
       branch,

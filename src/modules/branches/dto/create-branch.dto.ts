@@ -1,17 +1,14 @@
-import { Type } from 'class-transformer';
 import {
-  IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUrl,
   Matches,
   MaxLength,
-  Min,
   ValidateIf,
 } from 'class-validator';
 
-// Formato E.164 (+5215512345678), que es como Twilio envía los números.
+// Formato E.164 (+5215512345678).
 export const E164_PHONE = /^\+[1-9]\d{7,14}$/;
 
 export class CreateBranchDto {
@@ -42,16 +39,6 @@ export class CreateBranchDto {
       'phoneNumberReception must be in E.164 format (e.g. +5215512345678)',
   })
   phoneNumberReception?: string | null;
-
-  /**
-   * Créditos de mensajes a AÑADIR al saldo actual. Solo SUPER/ADMIN pueden
-   * enviarlo (se valida en el caso de uso).
-   */
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  availableMessages?: number;
 
   @IsOptional()
   @ValidateIf((_, value) => value !== null)

@@ -13,14 +13,12 @@ export const configureApp = (app: NestExpressApplication): void => {
   const configService = app.get(ConfigService);
   const isProduction = configService.get<boolean>('app.isProduction', false);
 
-  // Detrás de un proxy, sin esto req.ip es la IP del proxy (el rate limit
-  // bloquearía a todos a la vez) y req.protocol no coincide con la URL que
-  // firma Twilio.
+  // Detrás de un proxy, sin esto req.ip es la IP del proxy y el rate limit
+  // bloquearía a todos a la vez.
   app.set('trust proxy', configService.get<number>('app.trustProxy', 1));
 
   app.use(helmet());
   app.useBodyParser('json', { limit: '1mb' });
-  app.useBodyParser('urlencoded', { extended: true, limit: '1mb' });
 
   app.setGlobalPrefix('v1');
 

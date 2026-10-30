@@ -24,7 +24,7 @@ export class CreateBranchUseCase {
     user: User,
     lang: string,
   ): Promise<BranchResponse> {
-    await assertBranchChangesUtil(user, createBranchDto, this.branchRepository);
+    await assertBranchChangesUtil(createBranchDto, this.branchRepository);
 
     const newBranch = this.branchRepository.create({
       ...createBranchDto,
