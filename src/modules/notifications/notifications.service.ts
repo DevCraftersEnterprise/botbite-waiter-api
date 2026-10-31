@@ -2,7 +2,17 @@ import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
+import { NotificationType } from '@/modules/notifications/enums/notification-type.enum';
 import { OrdersGateway } from '@/modules/notifications/gateways/orders.gateway';
+
+export interface NewNotification {
+  branchId: string;
+  type: NotificationType;
+  message: string;
+  phoneNumber?: string;
+  orderId?: string | null;
+  roundId?: string | null;
+}
 
 @Injectable()
 export class NotificationsService {
@@ -11,6 +21,17 @@ export class NotificationsService {
     private readonly cashierNotificationRepository: Repository<CashierNotification>,
     private readonly ordersGateway: OrdersGateway,
   ) {}
+
+  /** Guarda el aviso y lo empuja a caja en tiempo real. */
+  async create(input: NewNotification): Promise<CashierNotification> {
+    const notification = await this.cashierNotificationRepository.save(
+      this.cashierNotificationRepository.create(input),
+    );
+
+    this.ordersGateway.emitNotificationUpdate(input.branchId, notification);
+
+    return notification;
+  }
 
   markAsRead(notificationId: string): Promise<void> {
     return this.setActive(notificationId, false);
@@ -52,6 +73,7 @@ export class NotificationsService {
     if (!notification || notification.isActive === isActive) return;
 
     notification.isActive = isActive;
+    notification.readAt = isActive ? null : new Date();
     const updated = await this.cashierNotificationRepository.save(notification);
 
     if (notification.branchId) {
