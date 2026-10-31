@@ -1,5 +1,6 @@
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
+import { Payment } from '@/modules/orders/entities/payment.entity';
 
 const money = (value: number | string): string =>
   `$${Number(value).toFixed(2)}`;
@@ -44,8 +45,51 @@ export const roundMessage = (
     .join('\n');
 };
 
-export const billMessage = (order: Order): string =>
-  `🧾 ${who(order)} solicita su cuenta. Total: ${money(order.total)}`;
+export const billMessage = (order: Order): string => {
+  const wallet = Number(order.walletDiscount ?? 0);
+  const detail =
+    wallet > 0
+      ? ` Subtotal: ${money(order.subtotal)}, monedero: -${money(wallet)}.`
+      : '';
+
+  return `🧾 ${who(order)} solicita su cuenta.${detail} Total: ${money(order.total)}`;
+};
 
 export const payWithWaiterMessage = (order: Order): string =>
   `💵 ${who(order)} pagará con el mesero: ${money(order.total)}`;
+
+export const paymentMessage = (order: Order, payment: Payment): string => {
+  const tip = Number(payment.tip);
+  const breakdown =
+    tip > 0
+      ? `consumo ${money(payment.consumption)} + propina ${money(tip)} = ${money(payment.paidAmount)}`
+      : money(payment.paidAmount);
+
+  return `💳 ${who(order)} pagó con Mercado Pago: ${breakdown}. Operación ${payment.providerPaymentId}. Ya no hay que cobrarle.`;
+};
+
+export const incompletePaymentMessage = (
+  order: Order,
+  payment: Payment,
+): string =>
+  `⚠️ Llegó un pago de ${money(payment.paidAmount)} de ${who(order)}, pero la cuenta era de ${money(payment.amount)}. Revísalo en Mercado Pago (operación ${payment.providerPaymentId}).`;
+
+export const closedAccountPaymentMessage = (
+  order: Order,
+  payment: Payment,
+): string =>
+  `⚠️ Llegó un pago de ${money(payment.paidAmount)} de ${who(order)}, pero esa cuenta ya estaba cerrada. Revísalo en Mercado Pago (operación ${payment.providerPaymentId}).`;
+
+export const unmatchedPaymentMessage = (payment: Payment): string =>
+  `⚠️ Llegó un pago de ${money(payment.paidAmount)} sin cuenta asociada. Revísalo en Mercado Pago (operación ${payment.providerPaymentId}).`;
+
+export const dailyCloseMessage = (orders: Order[]): string => {
+  const accounts = orders.map(
+    (order) => `${who(order)}: ${money(order.total)}`,
+  );
+
+  return [
+    `🌙 Cierre diario: ${orders.length} cuenta(s) sin pedir la cuenta. Revísalas:`,
+    ...accounts,
+  ].join('\n');
+};

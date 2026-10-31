@@ -36,6 +36,16 @@ export enum PaymentMethod {
   WAITER = 'waiter',
 }
 
+/** Qué pasó con un pago aprobado por el proveedor. */
+export enum PaymentStatus {
+  /** Cubrió la cuenta y la cerró. */
+  APPROVED = 'approved',
+  /** Llegó menos de lo que debía: la cuenta sigue abierta. */
+  INCOMPLETE = 'incomplete',
+  /** La cuenta no existe o ya estaba cerrada. */
+  UNMATCHED = 'unmatched',
+}
+
 /** Estado de una comanda. */
 export enum RoundStatus {
   NEW = 'new',

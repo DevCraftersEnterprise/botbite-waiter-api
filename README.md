@@ -125,10 +125,18 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 - Cada llave pertenece a una sucursal, y la sucursal siempre sale de la llave. Solo se guarda su hash y se muestra una sola vez.
 - `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si n8n envía `If-None-Match`, contesta `304` cuando nada cambió.
 - `POST /v1/bot/orders` abre la cuenta con su primera ronda y `POST /v1/bot/orders/:code/rounds` agrega comandas. Reenviar el mismo `code` o `number` no duplica nada. La API pone los precios con el menú vigente.
-- `PATCH /v1/bot/orders/:code` avanza la cuenta y `POST /v1/bot/notifications` manda avisos sueltos a caja.
+- `PATCH /v1/bot/orders/:code` avanza la cuenta. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina.
+- `POST /v1/bot/payments` registra un pago aprobado: cierra la cuenta y abona el cashback. Reenviar el mismo `providerPaymentId` no lo procesa dos veces.
+- `POST /v1/bot/daily-close` cierra las cuentas de WhatsApp que nadie pidió.
+- `POST /v1/bot/customers/lookup` y `PATCH /v1/bot/customers` leen y guardan al comensal. El teléfono va en el cuerpo para que no quede en los logs.
+- `POST /v1/bot/notifications` manda avisos sueltos a caja.
 - Las rutas están documentadas en Swagger, en `/docs`.
 
 **Cuentas y comandas:** `orders` es la cuenta de una mesa y `order_rounds` sus comandas. Estados de la cuenta: `open` → `bill_requested` → `payment_link` o `with_waiter` → `paid` o `settled`. También `auto_closed` y `cancelled`. Estados de la comanda: `new` → `preparing` → `delivered`, o `cancelled`. El personal mueve las comandas, cobra las cuentas y abre sus propias cuentas desde el panel; las rondas de una cuenta de WhatsApp solo las agrega el bot.
+
+**Monedero:** `restaurant_customers` guarda al comensal por restaurante y `wallet_movements` cada cambio de saldo. El saldo se comparte entre las sucursales de un restaurante y nunca entre restaurantes. El descuento se aplica una vez al pedir la cuenta, topado al saldo y al subtotal, y se devuelve si se cancela la cuenta o si una comanda cancelada deja la cuenta por debajo del descuento. El cashback se calcula sobre lo consumido, sin propina, y solo al pagar en línea.
+
+**Pagos:** `payments` guarda todo pago aprobado, aunque no cuadre, porque el dinero ya entró: `approved` cerró la cuenta, `incomplete` llegó de menos y la cuenta sigue abierta, y `unmatched` no tiene cuenta o ya estaba cerrada. En los dos últimos caja recibe una alerta. No se guarda la respuesta cruda de Mercado Pago porque trae datos del pagador.
 
 **Avisos a n8n:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, occurredAt, data }`. Los tipos son `round.status_changed`, `order.closed` y `catalog.changed`. Son de mejor esfuerzo: se reintentan y, si n8n no responde, solo se registra.
 

@@ -9,8 +9,15 @@ import { InjectDataSource } from '@nestjs/typeorm';
 import { randomBytes } from 'crypto';
 import { DataSource, EntityManager, FindOptionsWhere, In } from 'typeorm';
 import { errorCode } from '@/common/utils/error.util';
+import { fromCents, toCents } from '@/common/utils/money.util';
 import { BotEventsService } from '@/modules/bot-events/bot-events.service';
-import { Customer } from '@/modules/customers/entities/customer.entity';
+import { Branch } from '@/modules/branches/entities/branch.entity';
+import {
+  WalletMovementType,
+  WalletUse,
+} from '@/modules/customers/enums/customer.enums';
+import { RestaurantCustomersService } from '@/modules/customers/services/restaurant-customers.service';
+import { normalizePhone } from '@/modules/customers/utils/phone.util';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 import { NotificationType } from '@/modules/notifications/enums/notification-type.enum';
 import { OrdersGateway } from '@/modules/notifications/gateways/orders.gateway';
@@ -27,6 +34,7 @@ import {
 } from '@/modules/orders/enums/order.enums';
 import {
   billMessage,
+  dailyCloseMessage,
   payWithWaiterMessage,
   roundMessage,
 } from '@/modules/orders/utils/order-messages.util';
@@ -60,6 +68,21 @@ export interface RoundResult {
   created: boolean;
 }
 
+export interface BotOrderUpdate {
+  status: OrderStatus;
+  walletUse?: WalletUse;
+  walletAmount?: number;
+  tip?: number;
+}
+
+export interface BotOrderResult {
+  order: Order;
+  /** Saldo que le queda al comensal. Vacío si la cuenta no tiene cliente. */
+  walletBalance: number | null;
+  /** Pidió más saldo del que tiene. */
+  walletCapped: boolean;
+}
+
 /** A dónde puede avanzar el bot una cuenta. */
 export const BOT_TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
   [OrderStatus.OPEN]: [OrderStatus.BILL_REQUESTED],
@@ -82,10 +105,6 @@ export const ROUND_TRANSITIONS: Record<RoundStatus, RoundStatus[]> = {
   [RoundStatus.CANCELLED]: [],
 };
 
-/** Mismo formato que los teléfonos de la base: + y dígitos. */
-const normalizePhone = (phone: string): string =>
-  `+${phone.replace(/\D/g, '')}`;
-
 /** Código de las cuentas que abre el personal. Las de n8n empiezan con C. */
 const generateStaffCode = (): string =>
   `S${randomBytes(5).toString('hex').toUpperCase()}`;
@@ -103,6 +122,7 @@ export class OrderAccountsService {
     private readonly notificationsService: NotificationsService,
     private readonly ordersGateway: OrdersGateway,
     private readonly botEventsService: BotEventsService,
+    private readonly customers: RestaurantCustomersService,
   ) {}
 
   /** Abre la cuenta con su primera ronda. Reintentar con el mismo código no duplica. */
@@ -125,7 +145,7 @@ export class OrderAccountsService {
             language: input.language ?? 'es',
             locationVerified: input.locationVerified ?? false,
             customerId: input.phone
-              ? await this.upsertCustomer(
+              ? await this.customers.upsertCustomer(
                   manager,
                   input.phone,
                   input.customerName,
@@ -133,6 +153,15 @@ export class OrderAccountsService {
               : null,
           }),
         );
+
+        if (order.customerId) {
+          await this.customers.registerVisit(
+            manager,
+            input.branchId,
+            order.customerId,
+            !input.afterPreviousBill,
+          );
+        }
 
         const round = await this.createRound(manager, order, 1, input.items);
         const updated = await this.refreshTotals(manager, order.id);
@@ -219,18 +248,26 @@ export class OrderAccountsService {
     return result;
   }
 
-  /** Avance que informa el bot. Repetir el estado actual no hace nada. */
+  /**
+   * Avance que informa el bot. Repetir el estado actual no vuelve a descontar el
+   * monedero; solo actualiza la propina si cambió antes de generar el link.
+   */
   async updateFromBot(
     branchId: string,
     code: string,
-    status: OrderStatus,
-  ): Promise<Order> {
-    const { order, changed } = await this.dataSource.transaction(
+    update: BotOrderUpdate,
+  ): Promise<BotOrderResult> {
+    const { status } = update;
+    const { order, changed, walletCapped } = await this.dataSource.transaction(
       async (manager) => {
         const locked = await this.lockOrder(manager, { code, branchId });
 
         if (locked.status === status) {
-          return { order: locked, changed: false };
+          if (status === OrderStatus.PAYMENT_LINK && update.tip !== undefined) {
+            locked.tip = update.tip;
+            await manager.save(locked);
+          }
+          return { order: locked, changed: false, walletCapped: false };
         }
 
         if (!BOT_TRANSITIONS[locked.status]?.includes(status)) {
@@ -240,23 +277,39 @@ export class OrderAccountsService {
         }
 
         locked.status = status;
+        let walletCapped = false;
         if (status === OrderStatus.BILL_REQUESTED) {
           locked.billRequestedAt = new Date();
+          walletCapped = await this.useWallet(manager, locked, update);
         }
         if (status === OrderStatus.WITH_WAITER) {
           locked.paymentMethod = PaymentMethod.WAITER;
+          // La propina solo se conoce con el link.
+          locked.tip = 0;
         }
         if (status === OrderStatus.PAYMENT_LINK) {
           locked.paymentMethod = PaymentMethod.MERCADO_PAGO;
+          locked.tip = update.tip ?? 0;
         }
 
-        return { order: await manager.save(locked), changed: true };
+        return {
+          order: await manager.save(locked),
+          changed: true,
+          walletCapped,
+        };
       },
     );
 
     if (changed) await this.announceStatus(order);
 
-    return order;
+    return {
+      order,
+      walletBalance: await this.customers.balanceOf(
+        order.branchId,
+        order.customerId,
+      ),
+      walletCapped,
+    };
   }
 
   /** Caja cambia el estado de una comanda. */
@@ -276,7 +329,12 @@ export class OrderAccountsService {
           id: roundId,
         });
 
-        if (!ACTIVE_ORDER_STATUSES.includes(locked.status)) {
+        // Pagada puede seguir en cocina, pero cancelar ya sería un reembolso.
+        const stillServing =
+          locked.status === OrderStatus.PAID &&
+          status !== RoundStatus.CANCELLED;
+
+        if (!ACTIVE_ORDER_STATUSES.includes(locked.status) && !stillServing) {
           throw new ConflictException('The account is closed');
         }
 
@@ -297,7 +355,7 @@ export class OrderAccountsService {
 
         const updated =
           status === RoundStatus.CANCELLED
-            ? await this.refreshTotals(manager, locked.id)
+            ? await this.refreshAfterCancellation(manager, locked.id)
             : locked;
 
         return { order: updated, round: fresh };
@@ -313,7 +371,7 @@ export class OrderAccountsService {
         status: round.status,
         table: order.tableLabel,
         language: order.language,
-        phone: await this.phoneOf(order),
+        phone: await this.customers.phoneOf(order.customerId),
       });
     }
 
@@ -329,6 +387,42 @@ export class OrderAccountsService {
     return this.close(orderId, OrderStatus.CANCELLED);
   }
 
+  /**
+   * Cierre diario: n8n borra esa noche las sesiones, así que nadie pedirá esas
+   * cuentas. Solo las de WhatsApp sin cuenta pedida: las que ya tienen un cobro en
+   * curso y las del personal las cierra caja.
+   */
+  async closeDay(branchId: string): Promise<Order[]> {
+    const orders = await this.dataSource.transaction(async (manager) => {
+      const open = await manager.find(Order, {
+        where: {
+          branchId,
+          status: OrderStatus.OPEN,
+          source: OrderSource.WHATSAPP,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      const closedAt = new Date();
+
+      return manager.save(
+        open.map((order) =>
+          Object.assign(order, { status: OrderStatus.AUTO_CLOSED, closedAt }),
+        ),
+      );
+    });
+
+    if (orders.length > 0) {
+      await this.notificationsService.create({
+        branchId,
+        type: NotificationType.ALERT,
+        message: dailyCloseMessage(orders),
+      });
+      this.ordersGateway.emitOrderUpdate(branchId);
+    }
+
+    return orders;
+  }
+
   private async close(orderId: string, status: OrderStatus): Promise<Order> {
     const order = await this.dataSource.transaction(async (manager) => {
       const locked = await this.lockOrder(manager, { id: orderId });
@@ -342,6 +436,14 @@ export class OrderAccountsService {
       if (status === OrderStatus.SETTLED) {
         locked.paymentMethod ??= PaymentMethod.WAITER;
       }
+      if (status === OrderStatus.CANCELLED) {
+        await this.returnWallet(
+          manager,
+          locked,
+          toCents(locked.walletDiscount),
+          'Cuenta cancelada',
+        );
+      }
 
       return manager.save(locked);
     });
@@ -352,11 +454,91 @@ export class OrderAccountsService {
       this.botEventsService.emit(order.branchId, 'order.closed', {
         orderCode: order.code,
         status: order.status,
-        phone: await this.phoneOf(order),
+        phone: await this.customers.phoneOf(order.customerId),
       });
     }
 
     return order;
+  }
+
+  /** Descuenta el monedero al pedir la cuenta. Devuelve si pidió de más. */
+  private async useWallet(
+    manager: EntityManager,
+    order: Order,
+    { walletUse, walletAmount }: BotOrderUpdate,
+  ): Promise<boolean> {
+    if (!order.customerId || !walletUse || walletUse === WalletUse.NONE) {
+      return false;
+    }
+
+    const { features } = await manager.findOneOrFail(Branch, {
+      where: { id: order.branchId },
+      select: { id: true, features: true },
+    });
+    if (!features.wallet) return false;
+
+    const membership = await this.customers.lockMembership(
+      manager,
+      order.branchId,
+      order.customerId,
+    );
+    const balance = toCents(membership.walletBalance);
+    const wanted =
+      walletUse === WalletUse.ALL ? balance : toCents(walletAmount ?? 0);
+    const discount = Math.min(wanted, balance, toCents(order.subtotal));
+
+    if (discount > 0) {
+      await this.customers.moveWallet(manager, membership, {
+        type: WalletMovementType.USE,
+        cents: -discount,
+        orderId: order.id,
+      });
+      order.walletDiscount = fromCents(discount);
+      order.total = fromCents(toCents(order.subtotal) - discount);
+    }
+
+    return wanted > balance;
+  }
+
+  /** Regresa al monedero saldo que ya se había descontado de la cuenta. */
+  private async returnWallet(
+    manager: EntityManager,
+    order: Order,
+    cents: number,
+    note: string,
+  ): Promise<void> {
+    if (cents <= 0 || !order.customerId) return;
+
+    const membership = await this.customers.lockMembership(
+      manager,
+      order.branchId,
+      order.customerId,
+    );
+    await this.customers.moveWallet(manager, membership, {
+      type: WalletMovementType.ADJUSTMENT,
+      cents,
+      orderId: order.id,
+      note,
+    });
+
+    const discount = toCents(order.walletDiscount) - cents;
+    order.walletDiscount = fromCents(discount);
+    order.total = fromCents(toCents(order.subtotal) - discount);
+  }
+
+  /** Si la cuenta bajó de lo que se descontó, regresa la diferencia al monedero. */
+  private async refreshAfterCancellation(
+    manager: EntityManager,
+    orderId: string,
+  ): Promise<Order> {
+    const order = await this.refreshTotals(manager, orderId);
+    const excess = toCents(order.walletDiscount) - toCents(order.subtotal);
+
+    if (excess <= 0) return order;
+
+    await this.returnWallet(manager, order, excess, 'Comanda cancelada');
+
+    return manager.save(order);
   }
 
   private async addRoundTo(
@@ -483,36 +665,6 @@ export class OrderAccountsService {
     return manager.findOneByOrFail(Order, { id: orderId });
   }
 
-  /** Conserva el nombre guardado si WhatsApp no manda uno. */
-  private async upsertCustomer(
-    manager: EntityManager,
-    phone: string,
-    name?: string,
-  ): Promise<string> {
-    const [{ id }] = await manager.query<{ id: string }[]>(
-      `
-      INSERT INTO "customer" ("phone", "name")
-      VALUES ($1, $2)
-      ON CONFLICT ("phone") DO UPDATE
-      SET "name" = CASE WHEN EXCLUDED."name" <> '' THEN EXCLUDED."name" ELSE "customer"."name" END
-      RETURNING "id"
-      `,
-      [normalizePhone(phone), name ?? ''],
-    );
-
-    return id;
-  }
-
-  private async phoneOf(order: Order): Promise<string | null> {
-    if (!order.customerId) return null;
-
-    const customer = await this.dataSource
-      .getRepository(Customer)
-      .findOneBy({ id: order.customerId });
-
-    return customer?.phone ?? null;
-  }
-
   private async announceRound(
     { order, round }: RoundResult,
     options: {
@@ -523,7 +675,7 @@ export class OrderAccountsService {
   ): Promise<void> {
     const phoneNumber = options.phone
       ? normalizePhone(options.phone)
-      : ((await this.phoneOf(order)) ?? undefined);
+      : ((await this.customers.phoneOf(order.customerId)) ?? undefined);
 
     await this.notificationsService.create({
       branchId: order.branchId,
@@ -556,7 +708,8 @@ export class OrderAccountsService {
       await this.notificationsService.create({
         ...notification,
         branchId: order.branchId,
-        phoneNumber: (await this.phoneOf(order)) ?? undefined,
+        phoneNumber:
+          (await this.customers.phoneOf(order.customerId)) ?? undefined,
         orderId: order.id,
       });
     }

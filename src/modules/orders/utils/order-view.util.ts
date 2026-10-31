@@ -1,3 +1,4 @@
+import { fromCents, toCents } from '@/common/utils/money.util';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
@@ -39,6 +40,8 @@ export interface OrderView {
   walletDiscount: number;
   total: number;
   tip: number;
+  /** Total más propina: lo que se le cobra al comensal. */
+  amountDue: number;
   paymentMethod: Order['paymentMethod'];
   rounds?: RoundView[];
 }
@@ -80,6 +83,7 @@ export const toOrderView = (order: Order): OrderView => ({
   walletDiscount: Number(order.walletDiscount),
   total: Number(order.total),
   tip: Number(order.tip),
+  amountDue: fromCents(toCents(order.total) + toCents(order.tip)),
   paymentMethod: order.paymentMethod,
   ...(order.rounds && {
     rounds: [...order.rounds]
