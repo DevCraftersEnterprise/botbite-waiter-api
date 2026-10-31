@@ -1,10 +1,13 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TranslationService } from '@/common/services/translation.service';
+import { errorCode } from '@/common/utils/error.util';
 import { CreateCategoryDto } from '@/modules/categories/dto/create-category.dto';
 import { Category } from '@/modules/categories/entities/category.entity';
 import { CategoryResponse } from '@/modules/categories/interfaces/categories.interfaces';
+
+const UNIQUE_VIOLATION = '23505';
 
 @Injectable()
 export class CreateCategoryUseCase {
@@ -22,7 +25,14 @@ export class CreateCategoryUseCase {
   ): Promise<CategoryResponse> {
     const category = this.categoryRepository.create(createCategoryDto);
 
-    await this.categoryRepository.save(category);
+    try {
+      await this.categoryRepository.save(category);
+    } catch (error) {
+      if (errorCode(error) === UNIQUE_VIOLATION) {
+        throw new ConflictException('The restaurant already has this category');
+      }
+      throw error;
+    }
 
     this.logger.log(`Category created: ${category.name}`);
 

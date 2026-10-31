@@ -22,6 +22,8 @@ export default () => {
       // Número de proxies delante de la app (Railway, Render, Nginx...). Necesario
       // para que req.ip y req.protocol sean los del cliente real.
       trustProxy: parseInt(process.env.TRUST_PROXY ?? '1', 10),
+      // Sitio que redirige /m/<sucursal> a la página QR del mesero.
+      qrBaseUrl: process.env.QR_BASE_URL || 'https://botbite.com.mx',
     },
     database: {
       host: process.env.DB_HOST,
@@ -47,6 +49,10 @@ export default () => {
       ttlMs: parseInt(process.env.THROTTLE_TTL ?? '60', 10) * 1000,
       limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
       loginLimit: parseInt(process.env.THROTTLE_LOGIN_LIMIT ?? '5', 10),
+    },
+    docs: {
+      user: process.env.DOCS_USER,
+      password: process.env.DOCS_PASSWORD,
     },
     cloudinary: {
       cloudName: process.env.CLOUDINARY_CLOUD_NAME,

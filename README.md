@@ -56,6 +56,8 @@ Se validan al arrancar ([src/config/env.validation.ts](src/config/env.validation
 | `PORT`, `NODE_ENV` | Sí | `NODE_ENV=production` activa SSL en la base y las migraciones al arrancar |
 | `CORS_ORIGINS` | En producción | Orígenes del panel separados por coma. Aplica a REST y WebSockets |
 | `TRUST_PROXY` | No (1) | Número de proxies delante de la API (Render = 1) |
+| `QR_BASE_URL` | No (`https://botbite.com.mx`) | Sitio que redirige `/m/<sucursal>` a la página QR del mesero |
+| `DOCS_USER`, `DOCS_PASSWORD` | No | Acceso a Swagger en `/docs`. En producción no se publica sin ellas |
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Sí | Conexión a PostgreSQL |
 | `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED`, `DB_SSL_CA` | No | SSL activo en producción y con verificación del certificado |
 | `JWT_SECRET`, `JWT_REFRESH_SECRET` | Sí | Mínimo 32 caracteres cada uno y distintos entre sí |
@@ -107,6 +109,7 @@ src/
     ├── restaurants/  branches/  products/  categories/  menus/
     ├── orders/  customers/
     ├── notifications/ # notificaciones de caja y WebSocket (Socket.IO)
+    ├── bot/          # API para el mesero de n8n: llaves de servicio y configuración
     └── health/
 ```
 
@@ -116,6 +119,21 @@ La conversación con el comensal corre en **n8n**, fuera de este repo: QR con ve
 
 La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el panel lo muestra en vivo por Socket.IO, en el namespace `/orders`.
 
+**API del bot:** n8n llama a `/v1/bot/*` con el header `X-BotBite-Key`.
+- Cada llave pertenece a una sucursal, y la sucursal siempre sale de la llave. Solo se guarda su hash y se muestra una sola vez.
+- `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si n8n envía `If-None-Match`, contesta `304` cuando nada cambió.
+- Las rutas están documentadas en Swagger, en `/docs`.
+
+**Configuración de la sucursal:** se edita en el panel, en la pantalla "Mesero digital".
+
+| Método | Ruta | Quién |
+| --- | --- | --- |
+| `GET`, `PATCH` | `/v1/branches/:restaurantId/:branchId/bot-config` | Dueño o admin. Slug, `phone_number_id`, URL de n8n y funciones contratadas: solo admin |
+| `GET`, `POST` | `/v1/branches/:restaurantId/:branchId/bot-keys` | Solo admin |
+| `DELETE` | `/v1/branches/:restaurantId/:branchId/bot-keys/:keyId` | Solo admin |
+
+**QR:** el QR impreso abre `botbite.com.mx/m/<slug>`, que redirige a la página del mesero. Si n8n cambia de servidor, basta con cambiar la redirección en la landing; si cambia el slug, hay que generar e imprimir el QR de nuevo.
+
 **Rutas temporales:** `GET /v1/messages/notifications`, `PATCH /v1/messages/:id/read` y `/unread` siguen respondiendo para no romper el panel mientras se despliega; las nuevas están en `/v1/notifications`. `GET /v1/messages/conversations` responde una lista vacía hasta que la pantalla de Órdenes use las cuentas nuevas.
 
 ## Roles y permisos
@@ -123,7 +141,7 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 | Rol | Alcance |
 | --- | --- |
 | `super`, `admin` | Todos los restaurantes. Solo ellos activan o desactivan restaurantes, sucursales y productos |
-| `client` | Dueño: solo sus restaurantes, sucursales, productos, menús y pedidos |
+| `client` | Dueño: solo sus restaurantes, sucursales, productos, categorías, menús y pedidos |
 | `user` | Cajero o mesero: **solo lectura** de las sucursales que tiene asignadas (restaurantes, sucursales, pedidos y notificaciones, que sí puede marcar como atendidas) y el WebSocket de su sucursal |
 
 El control de acceso está centralizado en [`AccessControlService`](src/core/access/access-control.service.ts). El personal no tiene acceso por defecto: cada ruta de lectura lo habilita explícitamente.
@@ -166,6 +184,8 @@ E2E_DB_PORT=5432 npm run test:e2e          # e2e (variables E2E_DB_*)
 Las e2e levantan la app completa contra Postgres real. Cubren:
 - auth: rotación y reutilización de tokens, y logout;
 - multi-tenant y personal;
+- categorías por restaurante y slugs;
+- configuración del mesero, llaves y `GET /v1/bot/branch`;
 - pedidos y notificaciones;
 - WebSocket.
 

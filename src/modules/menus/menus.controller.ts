@@ -136,6 +136,10 @@ export class MenusController {
       menuId,
       dto.productId,
     );
+    await this.accessControl.assertCategoryBelongsToMenuRestaurant(
+      menuId,
+      dto.categoryId,
+    );
     return this.menusService.createMenuItem(menuId, dto, lang);
   }
 
@@ -183,6 +187,12 @@ export class MenusController {
       await this.accessControl.assertProductBelongsToMenuRestaurant(
         menuId,
         dto.productId,
+      );
+    }
+    if (dto.categoryId !== undefined) {
+      await this.accessControl.assertCategoryBelongsToMenuRestaurant(
+        menuId,
+        dto.categoryId,
       );
     }
     return this.menusService.updateMenuItem(menuId, itemId, dto, lang);

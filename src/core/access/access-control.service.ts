@@ -10,6 +10,7 @@ import { DataSource } from 'typeorm';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { BranchStaff } from '@/modules/branches/entities/branch-staff.entity';
 import { Branch } from '@/modules/branches/entities/branch.entity';
+import { Category } from '@/modules/categories/entities/category.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
@@ -184,6 +185,58 @@ export class AccessControlService {
       'notification',
       notificationId,
     );
+  }
+
+  async assertCategoryAccess(
+    user: AccessUser,
+    categoryId: number,
+    staffScope: StaffScope = 'none',
+  ): Promise<void> {
+    const row = await this.dataSource
+      .getRepository(Category)
+      .createQueryBuilder('category')
+      .innerJoin('category.restaurant', 'restaurant')
+      .select('restaurant.userId', 'ownerId')
+      .addSelect('restaurant.id', 'restaurantId')
+      .where('category.id = :categoryId', { categoryId })
+      .getRawOne<Tenancy>();
+
+    await this.assertTenancy(
+      user,
+      row && { ...row, branchId: null },
+      staffScope,
+      'category',
+      String(categoryId),
+    );
+  }
+
+  /**
+   * Un item de menú solo puede apuntar a categorías del mismo restaurante que
+   * el menú.
+   */
+  async assertCategoryBelongsToMenuRestaurant(
+    menuId: string,
+    categoryId: number,
+  ): Promise<void> {
+    const exists = await this.dataSource
+      .getRepository(Menu)
+      .createQueryBuilder('menu')
+      .innerJoin('menu.branch', 'branch')
+      .innerJoin(
+        Category,
+        'category',
+        'category.restaurantId = branch.restaurantId',
+      )
+      .where('menu.id = :menuId AND category.id = :categoryId', {
+        menuId,
+        categoryId,
+      })
+      .getExists();
+
+    if (!exists)
+      throw new BadRequestException(
+        'The category does not belong to this restaurant',
+      );
   }
 
   /**

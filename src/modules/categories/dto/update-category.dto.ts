@@ -1,4 +1,7 @@
-import { PartialType } from '@nestjs/mapped-types';
+import { OmitType, PartialType } from '@nestjs/mapped-types';
 import { CreateCategoryDto } from '@/modules/categories/dto/create-category.dto';
 
-export class UpdateCategoryDto extends PartialType(CreateCategoryDto) {}
+// Una categoría no se puede mover a otro restaurante.
+export class UpdateCategoryDto extends PartialType(
+  OmitType(CreateCategoryDto, ['restaurantId'] as const),
+) {}

@@ -1,3 +1,4 @@
+import { slugify, uniqueSlug } from '@/common/utils/slug.util';
 import { AccessControlService } from '@/core/access/access-control.service';
 import {
   CreateRestaurant,
@@ -12,7 +13,13 @@ export const createRestaurantUseCase = async (
   const data = { ...dto };
   if (!AccessControlService.isPrivileged(user)) delete data.isActive;
 
-  const restaurant = repository.create({ ...data, userId: user.id });
+  const slug = await uniqueSlug(
+    slugify(data.name, 'restaurante'),
+    (candidate) =>
+      repository.exists({ where: { slug: candidate }, withDeleted: true }),
+  );
+
+  const restaurant = repository.create({ ...data, slug, userId: user.id });
 
   await repository.save(restaurant);
 

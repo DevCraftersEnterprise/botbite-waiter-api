@@ -17,12 +17,12 @@ export class FindAllCategoriesUseCase {
 
   async execute(
     paginationDto: PaginationDto = {},
-    findCategoryDto: FindCategoryDto = {},
+    findCategoryDto: FindCategoryDto,
   ): Promise<CategoryListResponse> {
     const { limit = 10, offset = 0 } = paginationDto;
-    const { name, search, isActive } = findCategoryDto;
+    const { restaurantId, name, search, isActive } = findCategoryDto;
 
-    const whereConditions: FindOptionsWhere<Category> = {};
+    const whereConditions: FindOptionsWhere<Category> = { restaurantId };
 
     if (name) whereConditions.name = ILike(`%${name}%`);
     if (search) whereConditions.name = ILike(`%${search}%`);
@@ -30,7 +30,7 @@ export class FindAllCategoriesUseCase {
 
     const [categories, total] = await this.categoryRepository.findAndCount({
       where: whereConditions,
-      order: { name: 'ASC' },
+      order: { sortOrder: 'ASC', name: 'ASC' },
       skip: offset,
       take: limit,
     });

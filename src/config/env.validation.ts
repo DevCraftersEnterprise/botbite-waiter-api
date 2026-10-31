@@ -6,6 +6,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUrl,
   Matches,
   MinLength,
 } from 'class-validator';
@@ -29,6 +30,20 @@ export class EnvironmentVariables {
   @IsNumber()
   @Type(() => Number)
   TRUST_PROXY?: number;
+
+  @IsOptional()
+  @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
+  QR_BASE_URL?: string;
+
+  // Documentación de la API (/docs). Sin estas dos no se publica en producción.
+  @IsOptional()
+  @IsString()
+  DOCS_USER?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(12)
+  DOCS_PASSWORD?: string;
 
   // Base de datos
   @IsString()

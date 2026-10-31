@@ -32,6 +32,8 @@ interface Seed {
   restaurantB: Restaurant;
   branchB: Branch;
   customer: Customer;
+  category: Category;
+  menu: Menu;
   menuItem: MenuItem;
   notification: CashierNotification;
 }
@@ -318,6 +320,15 @@ describe('BotBite API (e2e)', () => {
         .get(`/v1/branches/restaurant/${seed.restaurantB.id}`)
         .set(auth(staffToken))
         .expect(403);
+
+      await http()
+        .get(`/v1/categories?restaurantId=${seed.restaurantA.id}`)
+        .set(auth(staffToken))
+        .expect(200);
+      await http()
+        .get(`/v1/categories?restaurantId=${seed.restaurantB.id}`)
+        .set(auth(staffToken))
+        .expect(403);
     });
 
     it('cannot modify anything', async () => {
@@ -350,6 +361,448 @@ describe('BotBite API (e2e)', () => {
         .get(`/v1/orders?branchId=${seed.branchA.id}`)
         .set(auth(staffToken))
         .expect(403);
+    });
+  });
+
+  describe('categories', () => {
+    const createCategory = async (
+      token: string,
+      restaurantId: string,
+      name: string,
+    ) =>
+      http()
+        .post('/v1/categories')
+        .set(auth(token))
+        .send({ restaurantId, name });
+
+    it('the owner creates them; another client cannot', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const other = await tokenFor(seed.clientB.email);
+
+      const created = await createCategory(
+        owner,
+        seed.restaurantA.id,
+        'bebidas',
+      );
+      expect(created.status).toBe(201);
+      expect(created.body.category.name).toBe('BEBIDAS');
+
+      const denied = await createCategory(
+        other,
+        seed.restaurantA.id,
+        'POSTRES',
+      );
+      expect(denied.status).toBe(403);
+    });
+
+    it('the name repeats between restaurants, not inside one', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const other = await tokenFor(seed.clientB.email);
+
+      const same = await createCategory(owner, seed.restaurantA.id, 'BEBIDAS');
+      expect(same.status).toBe(409);
+
+      const elsewhere = await createCategory(
+        other,
+        seed.restaurantB.id,
+        'BEBIDAS',
+      );
+      expect(elsewhere.status).toBe(201);
+    });
+
+    it('each restaurant only lists its own', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+
+      await http().get('/v1/categories').set(auth(owner)).expect(400);
+
+      const list = await http()
+        .get(`/v1/categories?restaurantId=${seed.restaurantA.id}`)
+        .set(auth(owner))
+        .expect(200);
+      expect(list.body.categories.map((c: { name: string }) => c.name)).toEqual(
+        expect.arrayContaining(['BEBIDAS', 'TACOS']),
+      );
+      expect(
+        list.body.categories.every(
+          (c: { restaurantId: string }) =>
+            c.restaurantId === seed.restaurantA.id,
+        ),
+      ).toBe(true);
+
+      await http()
+        .get(`/v1/categories?restaurantId=${seed.restaurantB.id}`)
+        .set(auth(owner))
+        .expect(403);
+    });
+
+    it('another client cannot edit or remove them', async () => {
+      const other = await tokenFor(seed.clientB.email);
+      const url = `/v1/categories/${seed.category.id}`;
+
+      await http().get(url).set(auth(other)).expect(403);
+      await http()
+        .patch(url)
+        .set(auth(other))
+        .send({ name: 'HACKEADA' })
+        .expect(403);
+      await http().delete(url).set(auth(other)).expect(403);
+    });
+
+    it('cannot be moved to another restaurant', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      await http()
+        .patch(`/v1/categories/${seed.category.id}`)
+        .set(auth(owner))
+        .send({ restaurantId: seed.restaurantB.id })
+        .expect(400);
+    });
+
+    it('a menu item cannot use a category of another restaurant', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const other = await tokenFor(seed.clientB.email);
+      const foreign = await createCategory(other, seed.restaurantB.id, 'AJENA');
+
+      await http()
+        .patch(`/v1/menus/menu/${seed.menu.id}/items/${seed.menuItem.id}`)
+        .set(auth(owner))
+        .send({ categoryId: foreign.body.category.id })
+        .expect(400);
+    });
+  });
+
+  describe('slugs', () => {
+    it('new branches get a unique slug', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const create = () =>
+        http()
+          .post(`/v1/branches/${seed.restaurantA.id}`)
+          .set(auth(owner))
+          .send({ name: 'Plaza Ñandú', address: 'Calle 3' })
+          .expect(201);
+
+      expect((await create()).body.branch.slug).toBe('plaza-nandu');
+      expect((await create()).body.branch.slug).toBe('plaza-nandu-2');
+    });
+
+    it('new restaurants get a slug', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .post('/v1/restaurants')
+        .set(auth(owner))
+        .send({ name: 'Punto de Unión' })
+        .expect(201);
+
+      expect(res.body.restaurant.slug).toBe('punto-de-union');
+    });
+
+    it('the owner sets the wallet percentage, only an admin the slug', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const admin = await tokenFor(seed.superUser.email);
+      const url = `/v1/restaurants/${seed.restaurantA.id}`;
+
+      await http()
+        .patch(url)
+        .set(auth(owner))
+        .send({ walletPct: 7.5 })
+        .expect(200);
+      await http()
+        .patch(url)
+        .set(auth(owner))
+        .send({ slug: 'otro-slug' })
+        .expect(403);
+      await http()
+        .patch(url)
+        .set(auth(admin))
+        .send({ slug: 'tacos-a' })
+        .expect(200);
+    });
+  });
+
+  describe('bot configuration', () => {
+    const configUrl = () =>
+      `/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/bot-config`;
+
+    it('the owner edits the daily operation', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({
+          latitude: 27.535038,
+          longitude: -109.954031,
+          verifyLocation: true,
+          geofenceMeters: 200,
+          dailyCloseTime: '22:15',
+          validTables: [' 1 ', 'A3', 'A3', ''],
+          surveyUrl: 'https://forms.gle/abc',
+        })
+        .expect(200);
+
+      expect(res.body.config).toMatchObject({
+        latitude: 27.535038,
+        longitude: -109.954031,
+        verifyLocation: true,
+        dailyCloseTime: '22:15',
+        validTables: ['1', 'A3'],
+      });
+    });
+
+    it('location needs coordinates', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ latitude: null })
+        .expect(400);
+    });
+
+    it('only an admin changes what connects to n8n or what was contracted', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const admin = await tokenFor(seed.superUser.email);
+
+      for (const body of [
+        { features: { wallet: false } },
+        { slug: 'otra' },
+        { botBaseUrl: 'https://n8n.test/webhook/x' },
+        { whatsappPhoneNumberId: '1439262192594415' },
+      ]) {
+        await http().patch(configUrl()).set(auth(owner)).send(body).expect(403);
+      }
+
+      const res = await http()
+        .patch(configUrl())
+        .set(auth(admin))
+        .send({
+          features: { pdfMenu: true },
+          botBaseUrl: 'https://n8n.test/webhook/mesero-centro/',
+          whatsappPhoneNumberId: '1439262192594415',
+        })
+        .expect(200);
+
+      expect(res.body.config.botBaseUrl).toBe(
+        'https://n8n.test/webhook/mesero-centro',
+      );
+      // Los cambios parciales conservan las demás funciones.
+      expect(res.body.config.features).toMatchObject({
+        pdfMenu: true,
+        wallet: true,
+      });
+    });
+
+    it('rejects values already used by another branch', async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      const url = `/v1/branches/${seed.restaurantB.id}/${seed.branchB.id}/bot-config`;
+
+      await http()
+        .patch(url)
+        .set(auth(admin))
+        .send({ slug: seed.branchA.slug })
+        .expect(409);
+      await http()
+        .patch(url)
+        .set(auth(admin))
+        .send({ whatsappPhoneNumberId: '1439262192594415' })
+        .expect(409);
+    });
+
+    it('rejects invalid values', async () => {
+      const admin = await tokenFor(seed.superUser.email);
+
+      for (const body of [
+        { slug: 'Con Espacios' },
+        { dailyCloseTime: '25:00' },
+        { timezone: 'Marte/Olympus' },
+        { botBaseUrl: 'http://sin-https.test' },
+        { features: { desconocida: true } },
+      ]) {
+        await http().patch(configUrl()).set(auth(admin)).send(body).expect(400);
+      }
+    });
+
+    it('another client cannot read it', async () => {
+      const other = await tokenFor(seed.clientB.email);
+      await http().get(configUrl()).set(auth(other)).expect(403);
+    });
+  });
+
+  describe('bot API', () => {
+    const BRANCH_URL = '/v1/bot/branch';
+    const keysUrl = () =>
+      `/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/bot-keys`;
+    let secret: string;
+    let keyId: string;
+
+    const asBot = (key: string, url = BRANCH_URL) =>
+      http().get(url).set('X-BotBite-Key', key);
+
+    it('only an admin manages keys', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      await http()
+        .post(keysUrl())
+        .set(auth(owner))
+        .send({ name: 'n8n' })
+        .expect(403);
+      await http().get(keysUrl()).set(auth(owner)).expect(403);
+    });
+
+    it('shows the key once and never stores it in clear', async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      const created = await http()
+        .post(keysUrl())
+        .set(auth(admin))
+        .send({ name: 'n8n Cocorit' })
+        .expect(201);
+
+      secret = created.body.secret;
+      keyId = created.body.key.id;
+      expect(secret).toMatch(/^bbk_[a-f0-9]{8}_/);
+
+      const list = await http().get(keysUrl()).set(auth(admin)).expect(200);
+      expect(JSON.stringify(list.body)).not.toContain(secret);
+      expect(list.body.keys[0]).not.toHaveProperty('keyHash');
+      expect(list.body.keys[0]).toMatchObject({
+        id: keyId,
+        name: 'n8n Cocorit',
+        keyPrefix: secret.slice(0, 12),
+        revokedAt: null,
+      });
+    });
+
+    it('rejects requests without a valid key', async () => {
+      await http().get(BRANCH_URL).expect(401);
+      await asBot('bbk_00000000_invalida').expect(401);
+
+      // Una sesión del panel tampoco sirve.
+      const admin = await tokenFor(seed.superUser.email);
+      await http().get(BRANCH_URL).set(auth(admin)).expect(401);
+    });
+
+    it('a key only opens the bot routes', async () => {
+      await asBot(secret, `/v1/orders?branchId=${seed.branchA.id}`).expect(401);
+    });
+
+    it('returns the configuration and the catalog of the key branch', async () => {
+      const res = await asBot(secret).expect(200);
+
+      expect(res.body.restaurant).toMatchObject({
+        id: seed.restaurantA.id,
+        slug: 'tacos-a',
+        walletPct: 7.5,
+      });
+      expect(res.body.branch).toMatchObject({
+        id: seed.branchA.id,
+        slug: seed.branchA.slug,
+        phoneNumberAssistant: ASSISTANT_PHONE,
+        phoneNumberReception: RECEPTION_PHONE,
+        whatsappPhoneNumberId: '1439262192594415',
+        verifyLocation: true,
+        dailyCloseTime: '22:15',
+      });
+      expect(res.body.catalog).toEqual([
+        {
+          id: seed.menuItem.id,
+          name: 'TACO AL PASTOR',
+          description: '',
+          price: 25,
+          category: 'TACOS',
+          variantGroup: null,
+          isActive: true,
+          isRecommended: false,
+          imageUrl: null,
+        },
+      ]);
+    });
+
+    it('includes switched-off dishes so the bot can say it has none', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const itemUrl = `/v1/menus/menu/${seed.menu.id}/items/${seed.menuItem.id}`;
+
+      await http()
+        .patch(itemUrl)
+        .set(auth(owner))
+        .send({
+          isActive: false,
+          shouldRecommend: true,
+          variantGroup: 'TACOS',
+        })
+        .expect(200);
+
+      const res = await asBot(secret).expect(200);
+      expect(res.body.catalog[0]).toMatchObject({
+        isActive: false,
+        isRecommended: true,
+        variantGroup: 'TACOS',
+      });
+
+      await http()
+        .patch(itemUrl)
+        .set(auth(owner))
+        .send({ isActive: true, shouldRecommend: false, variantGroup: null })
+        .expect(200);
+    });
+
+    it('answers 304 until something changes', async () => {
+      const first = await asBot(secret).expect(200);
+      const etag = first.headers.etag;
+      expect(etag).toBeTruthy();
+
+      await asBot(secret).set('If-None-Match', etag).expect(304);
+
+      const owner = await tokenFor(seed.clientA.email);
+      await http()
+        .patch(`/v1/menus/menu/${seed.menu.id}/items/${seed.menuItem.id}`)
+        .set(auth(owner))
+        .send({ price: 30 })
+        .expect(200);
+
+      const changed = await asBot(secret)
+        .set('If-None-Match', etag)
+        .expect(200);
+      expect(changed.body.catalog[0].price).toBe(30);
+    });
+
+    it('stops working if the branch is deactivated', async () => {
+      const branches = dataSource.getRepository(Branch);
+      await branches.update({ id: seed.branchA.id }, { isActive: false });
+
+      await asBot(secret).expect(403);
+
+      await branches.update({ id: seed.branchA.id }, { isActive: true });
+      await asBot(secret).expect(200);
+    });
+
+    it('records when a key was last used', async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      const list = await http().get(keysUrl()).set(auth(admin)).expect(200);
+      expect(list.body.keys[0].lastUsedAt).not.toBeNull();
+    });
+
+    it('a revoked key stops working', async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      await http().delete(`${keysUrl()}/${keyId}`).set(auth(admin)).expect(204);
+
+      await asBot(secret).expect(401);
+
+      await http().delete(`${keysUrl()}/${keyId}`).set(auth(admin)).expect(404);
+    });
+  });
+
+  describe('API docs', () => {
+    const SPEC_URL = '/docs/openapi.json';
+
+    it('require the credentials', async () => {
+      await http().get(SPEC_URL).expect(401);
+      await http().get(SPEC_URL).auth('docs', 'incorrecta').expect(401);
+    });
+
+    it('document only the bot routes', async () => {
+      const res = await http()
+        .get(SPEC_URL)
+        .auth('docs', process.env.DOCS_PASSWORD!)
+        .expect(200);
+
+      const { paths } = res.body as { paths: Record<string, unknown> };
+      expect(Object.keys(paths)).toEqual(['/v1/bot/branch']);
     });
   });
 
@@ -523,14 +976,23 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
 
   const restaurants = dataSource.getRepository(Restaurant);
   const [restaurantA, restaurantB] = await restaurants.save([
-    restaurants.create({ name: 'Tacos A', userId: clientA.id }),
-    restaurants.create({ name: 'Tacos B', userId: clientB.id }),
+    restaurants.create({
+      name: 'Tacos A',
+      slug: 'restaurante-a',
+      userId: clientA.id,
+    }),
+    restaurants.create({
+      name: 'Tacos B',
+      slug: 'restaurante-b',
+      userId: clientB.id,
+    }),
   ]);
 
   const branches = dataSource.getRepository(Branch);
   const [branchA, branchB] = await branches.save([
     branches.create({
       name: 'Centro',
+      slug: 'centro',
       address: 'Calle 1',
       restaurantId: restaurantA.id,
       phoneNumberAssistant: ASSISTANT_PHONE,
@@ -538,6 +1000,7 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
     }),
     branches.create({
       name: 'Norte',
+      slug: 'norte',
       address: 'Calle 2',
       restaurantId: restaurantB.id,
     }),
@@ -545,7 +1008,7 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
 
   const category = await dataSource
     .getRepository(Category)
-    .save({ name: 'Tacos' });
+    .save({ name: 'TACOS', restaurantId: restaurantA.id });
   const product = await dataSource
     .getRepository(Product)
     .save(
@@ -583,6 +1046,8 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
     restaurantB,
     branchB,
     customer,
+    category,
+    menu,
     menuItem,
     notification,
   };

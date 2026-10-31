@@ -31,8 +31,8 @@ export class CategoriesService {
   }
 
   async findAll(
-    paginationDto: PaginationDto = {},
-    findCategoryDto: FindCategoryDto = {},
+    paginationDto: PaginationDto,
+    findCategoryDto: FindCategoryDto,
   ): Promise<CategoryListResponse> {
     return await this.findAllCategoriesUseCase.execute(
       paginationDto,
