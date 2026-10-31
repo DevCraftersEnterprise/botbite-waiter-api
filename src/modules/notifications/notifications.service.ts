@@ -49,7 +49,7 @@ export class NotificationsService {
       this.cashierNotificationRepository.find({
         where: { branchId, isActive: true },
         order: { createdAt: 'DESC' },
-        take: 10,
+        take: 50,
       }),
       this.cashierNotificationRepository.find({
         where: { branchId, isActive: false },
