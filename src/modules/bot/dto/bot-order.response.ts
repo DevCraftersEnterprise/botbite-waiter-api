@@ -98,6 +98,9 @@ export class BotOrder {
   @ApiProperty({ example: 0 })
   tip: number;
 
+  @ApiProperty({ example: 210, description: 'Total más propina' })
+  amountDue: number;
+
   @ApiProperty({ enum: PaymentMethod, nullable: true })
   paymentMethod: PaymentMethod | null;
 }
@@ -118,4 +121,18 @@ export class BotRoundResponse {
 export class BotOrderResponse {
   @ApiProperty({ type: BotOrder })
   order: BotOrder;
+
+  @ApiProperty({
+    type: Number,
+    nullable: true,
+    example: 12.5,
+    description:
+      'Saldo que le queda al comensal. Vacío si la cuenta no tiene cliente',
+  })
+  walletBalance: number | null;
+
+  @ApiProperty({
+    description: 'Pidió más saldo del que tiene: se usó el saldo completo',
+  })
+  walletCapped: boolean;
 }

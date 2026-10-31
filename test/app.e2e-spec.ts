@@ -5,7 +5,7 @@ import { createServer, Server } from 'http';
 import { AddressInfo } from 'net';
 import { io, Socket } from 'socket.io-client';
 import request from 'supertest';
-import { DataSource } from 'typeorm';
+import { DataSource, Like } from 'typeorm';
 import { signBotEvent } from '@/modules/bot-events/bot-events.service';
 import { AppModule } from '@/app.module';
 import { configureApp } from '@/app.setup';
@@ -13,10 +13,14 @@ import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { Category } from '@/modules/categories/entities/category.entity';
 import { Customer } from '@/modules/customers/entities/customer.entity';
+import { RestaurantCustomer } from '@/modules/customers/entities/restaurant-customer.entity';
+import { WalletMovement } from '@/modules/customers/entities/wallet-movement.entity';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
+import { NotificationType } from '@/modules/notifications/enums/notification-type.enum';
 import { Order } from '@/modules/orders/entities/order.entity';
+import { Payment } from '@/modules/orders/entities/payment.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
 import { User } from '@/modules/users/entities/user.entity';
@@ -1363,6 +1367,730 @@ describe('BotBite API (e2e)', () => {
         const account = (await activeOrders()).find((o) => o.code === code);
         expect(account?.rounds).toHaveLength(9);
         expect(account?.total).toBe(225);
+      });
+    });
+
+    describe('customers, wallet and payments', () => {
+      let otherSecret: string;
+      let phoneCounter = 0;
+
+      const nextPhone = () =>
+        `52164400${String(++phoneCounter).padStart(5, '0')}`;
+      const openFor = (phone: string, extra: object = {}) => {
+        const code = nextCode();
+        return openAccount(code, { phone, ...extra })
+          .expect(201)
+          .then(() => code);
+      };
+      const lookup = async (phone: string, key = secret) => {
+        const res = await http()
+          .post('/v1/bot/customers/lookup')
+          .set({ 'X-BotBite-Key': key })
+          .send({ phone })
+          .expect(200);
+        return res.body as {
+          known: boolean;
+          name: string;
+          visits: number;
+          promos: string;
+          unsubscribedAt: string | null;
+          walletBalance: number;
+        };
+      };
+      const giveWallet = async (phone: string, walletBalance: number) => {
+        const customer = await dataSource
+          .getRepository(Customer)
+          .findOneByOrFail({ phone: `+${phone}` });
+        await dataSource
+          .getRepository(RestaurantCustomer)
+          .update({ customerId: customer.id }, { walletBalance });
+      };
+      const askBill = (code: string, extra: object = {}) =>
+        http()
+          .patch(`${ordersUrl}/${code}`)
+          .set(bot())
+          .send({ status: 'bill_requested', ...extra });
+      const sendLink = (code: string, tip = 0) =>
+        http()
+          .patch(`${ordersUrl}/${code}`)
+          .set(bot())
+          .send({ status: 'payment_link', tip })
+          .expect(200);
+      const pay = (
+        providerPaymentId: string,
+        amount: number,
+        orderCode?: string,
+        key = secret,
+      ) =>
+        http().post('/v1/bot/payments').set({ 'X-BotBite-Key': key }).send({
+          orderCode,
+          providerPaymentId,
+          amount,
+          paymentType: 'credit_card',
+        });
+      const orderOf = (code: string) =>
+        dataSource.getRepository(Order).findOneByOrFail({ code });
+      const movementsOf = (orderId: string) =>
+        dataSource.getRepository(WalletMovement).find({
+          where: { orderId },
+          order: { createdAt: 'ASC' },
+        });
+      const paymentId = () => `MP${nextCode()}`;
+
+      beforeAll(async () => {
+        await dataSource
+          .getRepository(Restaurant)
+          .update({ id: seed.restaurantA.id }, { walletPct: 5 });
+
+        // Una prueba anterior desactiva la sucursal B.
+        const branches = dataSource.getRepository(Branch);
+        const otherBranch = await branches.save(
+          branches.create({
+            name: 'Sur',
+            slug: 'sur',
+            address: 'Calle 3',
+            restaurantId: seed.restaurantB.id,
+          }),
+        );
+        const admin = await tokenFor(seed.superUser.email);
+        const key = await http()
+          .post(
+            `/v1/branches/${seed.restaurantB.id}/${otherBranch.id}/bot-keys`,
+          )
+          .set(auth(admin))
+          .send({ name: 'n8n otro restaurante' })
+          .expect(201);
+        otherSecret = key.body.secret;
+      });
+
+      describe('customers', () => {
+        it('counts one visit per account, not per retry', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await openAccount(code, { phone }).expect(200);
+          await openFor(phone, { afterPreviousBill: true });
+          await openFor(phone);
+
+          const customer = await lookup(phone);
+          expect(customer).toMatchObject({
+            known: true,
+            name: 'Sergio',
+            visits: 2,
+            promos: 'pending',
+            walletBalance: 0,
+          });
+        });
+
+        it('answers without error for someone who never came', async () => {
+          await expect(lookup(nextPhone())).resolves.toMatchObject({
+            known: false,
+            visits: 0,
+            walletBalance: 0,
+          });
+        });
+
+        it('keeps customers apart between restaurants', async () => {
+          const phone = nextPhone();
+          await openFor(phone);
+          await giveWallet(phone, 80);
+
+          await expect(lookup(phone, otherSecret)).resolves.toMatchObject({
+            known: false,
+            name: '',
+            walletBalance: 0,
+          });
+        });
+
+        it('saves the answer to promotions and the unsubscribe', async () => {
+          const phone = nextPhone();
+          const url = '/v1/bot/customers';
+
+          const accepted = await http()
+            .patch(url)
+            .set(bot())
+            .send({ phone, name: 'Ana', promos: 'accepted' })
+            .expect(200);
+          expect(accepted.body).toMatchObject({
+            known: true,
+            name: 'Ana',
+            promos: 'accepted',
+          });
+
+          const left = await http()
+            .patch(url)
+            .set(bot())
+            .send({ phone, unsubscribed: true })
+            .expect(200);
+          expect(left.body.promos).toBe('declined');
+          expect(left.body.unsubscribedAt).not.toBeNull();
+
+          const back = await http()
+            .patch(url)
+            .set(bot())
+            .send({ phone, promos: 'accepted' })
+            .expect(200);
+          expect(back.body.unsubscribedAt).toBeNull();
+
+          await http()
+            .patch(url)
+            .set(bot())
+            .send({ phone, promos: 'pending' })
+            .expect(400);
+        });
+      });
+
+      describe('wallet', () => {
+        it('discounts what the customer chose and leaves a record', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await giveWallet(phone, 80);
+
+          const res = await askBill(code, {
+            walletUse: 'amount',
+            walletAmount: 30,
+          }).expect(200);
+
+          expect(res.body.order).toMatchObject({
+            subtotal: 50,
+            walletDiscount: 30,
+            total: 20,
+            amountDue: 20,
+          });
+          expect(res.body.walletBalance).toBe(50);
+          expect(res.body.walletCapped).toBe(false);
+
+          const [movement] = await movementsOf(res.body.order.id);
+          expect(movement.type).toBe('use');
+          expect(Number(movement.amount)).toBe(-30);
+          expect(Number(movement.balanceAfter)).toBe(50);
+
+          const notices = await notificationsOf(res.body.order.id);
+          expect(notices[notices.length - 1].message).toContain(
+            'monedero: -$30.00',
+          );
+        });
+
+        it('caps the discount to the balance and to the subtotal', async () => {
+          const poor = nextPhone();
+          const poorCode = await openFor(poor);
+          await giveWallet(poor, 12.5);
+
+          const capped = await askBill(poorCode, {
+            walletUse: 'amount',
+            walletAmount: 40,
+          }).expect(200);
+          expect(capped.body.order.walletDiscount).toBe(12.5);
+          expect(capped.body.walletBalance).toBe(0);
+          expect(capped.body.walletCapped).toBe(true);
+
+          const rich = nextPhone();
+          const richCode = await openFor(rich);
+          await giveWallet(rich, 500);
+
+          const whole = await askBill(richCode, { walletUse: 'all' }).expect(
+            200,
+          );
+          expect(whole.body.order.total).toBe(0);
+          expect(whole.body.order.walletDiscount).toBe(50);
+          expect(whole.body.walletBalance).toBe(450);
+          expect(whole.body.walletCapped).toBe(false);
+        });
+
+        it('does not discount twice when the bot retries', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await giveWallet(phone, 80);
+
+          await askBill(code, { walletUse: 'all' }).expect(200);
+          const retry = await askBill(code, { walletUse: 'all' }).expect(200);
+
+          expect(retry.body.order.walletDiscount).toBe(50);
+          expect(retry.body.walletBalance).toBe(30);
+          expect(await movementsOf(retry.body.order.id)).toHaveLength(1);
+        });
+
+        it('does nothing when the customer declines', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await giveWallet(phone, 80);
+
+          const res = await askBill(code, { walletUse: 'none' }).expect(200);
+          expect(res.body.order.walletDiscount).toBe(0);
+          expect(res.body.walletBalance).toBe(80);
+        });
+
+        it('requires an amount with walletUse amount', async () => {
+          const code = await openFor(nextPhone());
+
+          await askBill(code, { walletUse: 'amount' }).expect(400);
+          await askBill(code, {
+            walletUse: 'amount',
+            walletAmount: -5,
+          }).expect(400);
+        });
+
+        it('never spends the same balance twice at the same time', async () => {
+          const phone = nextPhone();
+          const codes = [
+            await openFor(phone),
+            await openFor(phone),
+            await openFor(phone),
+          ];
+          await giveWallet(phone, 70);
+
+          const responses = await Promise.all(
+            codes.map((code) => askBill(code, { walletUse: 'all' })),
+          );
+
+          expect(responses.every((r) => r.status === 200)).toBe(true);
+          const used = responses.reduce(
+            (sum, r) => sum + Number(r.body.order.walletDiscount),
+            0,
+          );
+          expect(used).toBe(70);
+          expect((await lookup(phone)).walletBalance).toBe(0);
+        });
+
+        it('returns the balance when the account is cancelled', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await giveWallet(phone, 80);
+          const { body } = await askBill(code, { walletUse: 'all' }).expect(
+            200,
+          );
+
+          await http()
+            .post(`/v1/orders/${body.order.id}/cancel`)
+            .set(auth(ownerToken))
+            .expect(200);
+
+          expect((await lookup(phone)).walletBalance).toBe(80);
+          const movements = await movementsOf(body.order.id);
+          expect(movements.map((m) => m.type)).toEqual(['use', 'adjustment']);
+          expect(movements[1].note).toBe('Cuenta cancelada');
+          expect(Number((await orderOf(code)).walletDiscount)).toBe(0);
+        });
+
+        it('returns the excess when a cancelled round lowers the bill', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await http()
+            .post(`${ordersUrl}/${code}/rounds`)
+            .set(bot())
+            .send({ number: 2, items: [item(2)] })
+            .expect(201);
+          await giveWallet(phone, 80);
+          await askBill(code, { walletUse: 'all' }).expect(200);
+
+          await http()
+            .patch(`/v1/orders/rounds/${await roundIdOf(code, 2)}`)
+            .set(auth(ownerToken))
+            .send({ status: 'cancelled' })
+            .expect(200);
+
+          const order = await orderOf(code);
+          expect(Number(order.subtotal)).toBe(50);
+          expect(Number(order.walletDiscount)).toBe(50);
+          expect(Number(order.total)).toBe(0);
+          expect((await lookup(phone)).walletBalance).toBe(30);
+        });
+
+        it('keeps the discount when the bill stays above it', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await http()
+            .post(`${ordersUrl}/${code}/rounds`)
+            .set(bot())
+            .send({ number: 2, items: [item(2)] })
+            .expect(201);
+          await giveWallet(phone, 20);
+          await askBill(code, { walletUse: 'all' }).expect(200);
+
+          await http()
+            .patch(`/v1/orders/rounds/${await roundIdOf(code, 2)}`)
+            .set(auth(ownerToken))
+            .send({ status: 'cancelled' })
+            .expect(200);
+
+          const order = await orderOf(code);
+          expect(Number(order.walletDiscount)).toBe(20);
+          expect(Number(order.total)).toBe(30);
+          expect((await lookup(phone)).walletBalance).toBe(0);
+        });
+
+        it('ignores the wallet when the branch has it off', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await giveWallet(phone, 80);
+          const branches = dataSource.getRepository(Branch);
+          const { features } = await branches.findOneByOrFail({
+            id: seed.branchA.id,
+          });
+          await branches.update(
+            { id: seed.branchA.id },
+            { features: { ...features, wallet: false } },
+          );
+
+          try {
+            const res = await askBill(code, { walletUse: 'all' }).expect(200);
+            expect(res.body.order.walletDiscount).toBe(0);
+
+            await sendLink(code);
+            const paid = await pay(paymentId(), 50, code).expect(201);
+            expect(paid.body.status).toBe('approved');
+            expect(paid.body.cashback).toBe(0);
+            expect(paid.body.walletBalance).toBe(80);
+          } finally {
+            await branches.update({ id: seed.branchA.id }, { features });
+          }
+        });
+      });
+
+      describe('payments', () => {
+        it('closes the account and earns cashback without the tip', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await askBill(code).expect(200);
+
+          const link = await sendLink(code, 10);
+          expect(link.body.order).toMatchObject({
+            status: 'payment_link',
+            total: 50,
+            tip: 10,
+            amountDue: 60,
+          });
+
+          const id = paymentId();
+          const res = await pay(id, 60, code).expect(201);
+
+          expect(res.body).toMatchObject({
+            created: true,
+            status: 'approved',
+            cashback: 2.5,
+            walletBalance: 2.5,
+          });
+          expect(res.body.order.status).toBe('paid');
+          expect(res.body.order.paymentMethod).toBe('mercado_pago');
+          expect(res.body.order.closedAt).not.toBeNull();
+
+          const payment = await dataSource
+            .getRepository(Payment)
+            .findOneByOrFail({ providerPaymentId: id });
+          expect(Number(payment.consumption)).toBe(50);
+          expect(Number(payment.tip)).toBe(10);
+          expect(Number(payment.amount)).toBe(60);
+          expect(Number(payment.paidAmount)).toBe(60);
+          expect(payment.paymentType).toBe('credit_card');
+
+          const [movement] = await movementsOf(res.body.order.id);
+          expect(movement.type).toBe('cashback');
+          expect(Number(movement.amount)).toBe(2.5);
+
+          const notices = await notificationsOf(res.body.order.id);
+          const notice = notices[notices.length - 1];
+          expect(notice.type).toBe('payment');
+          expect(notice.message).toContain('consumo $50.00 + propina $10.00');
+        });
+
+        it('earns cashback on what was paid, after the discount', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone, { items: [item(1)] });
+          await giveWallet(phone, 14.9);
+          await askBill(code, { walletUse: 'all' }).expect(200);
+          await sendLink(code);
+
+          const res = await pay(paymentId(), 10.1, code).expect(201);
+
+          // 5 % de 10.10 son 0.505: redondea como el bot.
+          expect(res.body.cashback).toBe(0.51);
+          expect(res.body.walletBalance).toBe(0.51);
+        });
+
+        it('does not process the same notice twice', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await askBill(code).expect(200);
+          await sendLink(code);
+          const id = paymentId();
+
+          const first = await pay(id, 50, code).expect(201);
+          const retry = await pay(id, 50, code).expect(200);
+
+          expect(retry.body).toMatchObject({
+            created: false,
+            status: 'approved',
+            cashback: 2.5,
+            walletBalance: 2.5,
+          });
+
+          const payments = await notificationsOf(first.body.order.id);
+          expect(
+            payments.filter((n) => n.type === NotificationType.PAYMENT),
+          ).toHaveLength(1);
+          expect(await movementsOf(first.body.order.id)).toHaveLength(1);
+        });
+
+        it('survives the same notice arriving at the same time', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await askBill(code).expect(200);
+          await sendLink(code);
+          const id = paymentId();
+
+          const responses = await Promise.all(
+            Array.from({ length: 6 }, () => pay(id, 50, code)),
+          );
+
+          expect(responses.filter((r) => r.status === 201)).toHaveLength(1);
+          expect(responses.filter((r) => r.status === 200)).toHaveLength(5);
+          expect((await lookup(phone)).walletBalance).toBe(2.5);
+        });
+
+        it('leaves the account open when less money arrives', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await askBill(code).expect(200);
+          await sendLink(code, 10);
+
+          const res = await pay(paymentId(), 40, code).expect(201);
+
+          expect(res.body).toMatchObject({
+            status: 'incomplete',
+            cashback: 0,
+            walletBalance: 0,
+          });
+          expect((await orderOf(code)).status).toBe('payment_link');
+
+          const notices = await notificationsOf(res.body.order.id);
+          const notice = notices[notices.length - 1];
+          expect(notice.type).toBe('alert');
+          expect(notice.message).toContain('la cuenta era de $60.00');
+        });
+
+        it('forgives the rounding of the provider', async () => {
+          const code = await openFor(nextPhone());
+          await askBill(code).expect(200);
+          await sendLink(code);
+
+          const res = await pay(paymentId(), 49.5, code).expect(201);
+
+          expect(res.body.status).toBe('approved');
+        });
+
+        it('keeps a payment without an account and warns the cashier', async () => {
+          const id = paymentId();
+
+          const res = await pay(id, 123.45, 'NOEXISTE').expect(201);
+          expect(res.body).toMatchObject({
+            status: 'unmatched',
+            cashback: 0,
+            walletBalance: null,
+            order: null,
+          });
+
+          await pay(id, 123.45, 'NOEXISTE').expect(200);
+
+          const payment = await dataSource
+            .getRepository(Payment)
+            .findOneByOrFail({ providerPaymentId: id });
+          expect(payment.orderId).toBeNull();
+          expect(payment.branchId).toBe(seed.branchA.id);
+
+          const notices = await dataSource
+            .getRepository(CashierNotification)
+            .findBy({ message: Like(`%operación ${id}%`) });
+          expect(notices).toHaveLength(1);
+          expect(notices[0].message).toContain('sin cuenta asociada');
+        });
+
+        it('warns once when an orphan payment arrives repeated', async () => {
+          const id = paymentId();
+
+          const responses = await Promise.all(
+            Array.from({ length: 5 }, () => pay(id, 80, 'NOEXISTE')),
+          );
+
+          expect(responses.filter((r) => r.status === 201)).toHaveLength(1);
+          expect(responses.filter((r) => r.status === 200)).toHaveLength(4);
+
+          const notices = await dataSource
+            .getRepository(CashierNotification)
+            .findBy({ message: Like(`%operación ${id}%`) });
+          expect(notices).toHaveLength(1);
+        });
+
+        it('does not touch an account of another branch', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await askBill(code).expect(200);
+
+          const res = await pay(paymentId(), 50, code, otherSecret).expect(201);
+
+          expect(res.body.status).toBe('unmatched');
+          expect(res.body.order).toBeNull();
+          expect((await orderOf(code)).status).toBe('bill_requested');
+          expect((await lookup(phone)).walletBalance).toBe(0);
+        });
+
+        it('rejects a payment id already used by another branch', async () => {
+          const id = paymentId();
+
+          await pay(id, 10).expect(201);
+          await pay(id, 10, undefined, otherSecret).expect(409);
+        });
+
+        it('warns when the account was already closed', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await askBill(code).expect(200);
+          await sendLink(code);
+          const { id } = await orderOf(code);
+
+          await http()
+            .post(`/v1/orders/${id}/settle`)
+            .set(auth(ownerToken))
+            .expect(200);
+
+          const res = await pay(paymentId(), 50, code).expect(201);
+
+          expect(res.body.status).toBe('unmatched');
+          expect(res.body.cashback).toBe(0);
+          expect((await orderOf(code)).status).toBe('settled');
+
+          const notices = await notificationsOf(id);
+          expect(notices[notices.length - 1].message).toContain(
+            'ya estaba cerrada',
+          );
+        });
+
+        it('gives no cashback when the waiter charges', async () => {
+          const phone = nextPhone();
+          const code = await openFor(phone);
+          await askBill(code).expect(200);
+          await setStatus(code, 'with_waiter').expect(200);
+          const { id } = await orderOf(code);
+
+          await http()
+            .post(`/v1/orders/${id}/settle`)
+            .set(auth(ownerToken))
+            .expect(200);
+
+          expect((await lookup(phone)).walletBalance).toBe(0);
+        });
+
+        it('lets the tip change until the link goes out', async () => {
+          const code = await openFor(nextPhone());
+          await askBill(code).expect(200);
+
+          await sendLink(code, 10);
+          const changed = await sendLink(code, 15);
+          expect(changed.body.order.tip).toBe(15);
+
+          const waiter = await setStatus(code, 'with_waiter').expect(200);
+          expect(waiter.body.order.tip).toBe(0);
+          expect(waiter.body.order.amountDue).toBe(50);
+        });
+
+        it('keeps a paid account visible while the kitchen works', async () => {
+          const code = await openFor(nextPhone());
+          await askBill(code).expect(200);
+          await sendLink(code);
+          await pay(paymentId(), 50, code).expect(201);
+
+          const account = (await activeOrders()).find((o) => o.code === code);
+          expect(account?.status).toBe('paid');
+
+          const roundUrl = `/v1/orders/rounds/${await roundIdOf(code, 1)}`;
+          await http()
+            .patch(roundUrl)
+            .set(auth(ownerToken))
+            .send({ status: 'cancelled' })
+            .expect(409);
+          await http()
+            .patch(roundUrl)
+            .set(auth(ownerToken))
+            .send({ status: 'delivered' })
+            .expect(200);
+
+          expect((await activeOrders()).some((o) => o.code === code)).toBe(
+            false,
+          );
+        });
+      });
+
+      describe('daily close', () => {
+        const dailyClose = (key = secret) =>
+          http()
+            .post('/v1/bot/daily-close')
+            .set({ 'X-BotBite-Key': key })
+            .expect(200);
+
+        it('closes only the WhatsApp accounts nobody asked for', async () => {
+          // Lo que dejaron abierto las pruebas anteriores no estorba aquí.
+          await dailyClose();
+
+          const open = await openFor(nextPhone());
+          const billed = await openFor(nextPhone());
+          await askBill(billed).expect(200);
+          const tab = await http()
+            .post('/v1/orders/tabs')
+            .set(auth(ownerToken))
+            .send({
+              branchId: seed.branchA.id,
+              table: '9',
+              items: [item()],
+            })
+            .expect(201);
+
+          const res = await dailyClose();
+
+          expect(res.body.closed).toEqual([open]);
+
+          const closed = await orderOf(open);
+          expect(closed.status).toBe('auto_closed');
+          expect(closed.closedAt).not.toBeNull();
+          expect((await orderOf(billed)).status).toBe('bill_requested');
+
+          const active = await activeOrders();
+          expect(active.some((o) => o.id === tab.body.order.id)).toBe(true);
+          expect(active.some((o) => o.code === open)).toBe(false);
+
+          const alerts = await dataSource
+            .getRepository(CashierNotification)
+            .findBy({
+              branchId: seed.branchA.id,
+              message: Like('%Cierre diario: 1 cuenta(s)%'),
+            });
+          expect(alerts).toHaveLength(1);
+          expect(alerts[0].type).toBe('alert');
+        });
+
+        it('does nothing when repeated and respects the branch', async () => {
+          const open = await openFor(nextPhone());
+
+          const other = await dailyClose(otherSecret);
+          expect(other.body.closed).toEqual([]);
+          expect((await orderOf(open)).status).toBe('open');
+
+          await dailyClose();
+          const notifications = dataSource.getRepository(CashierNotification);
+          const before = await notifications.countBy({
+            branchId: seed.branchA.id,
+          });
+
+          const again = await dailyClose();
+
+          expect(again.body.closed).toEqual([]);
+          expect(
+            await notifications.countBy({ branchId: seed.branchA.id }),
+          ).toBe(before);
+        });
+
+        it('stays closed to the new routes without a key', async () => {
+          await http().post('/v1/bot/daily-close').expect(401);
+          await http().post('/v1/bot/payments').send({}).expect(401);
+          await http().post('/v1/bot/customers/lookup').send({}).expect(401);
+        });
       });
     });
 

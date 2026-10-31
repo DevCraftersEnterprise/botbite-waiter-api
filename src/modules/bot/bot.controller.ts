@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   HttpStatus,
   NotFoundException,
   Param,
@@ -25,15 +26,24 @@ import { Repository } from 'typeorm';
 import { BotBranchId } from '@/modules/bot/decorators/bot-branch-id.decorator';
 import { AddBotRoundDto } from '@/modules/bot/dto/add-bot-round.dto';
 import { BotBranchResponse } from '@/modules/bot/dto/bot-branch.response';
+import { BotCustomerResponse } from '@/modules/bot/dto/bot-customer.response';
 import {
   BotOrderResponse,
   BotRoundResponse,
 } from '@/modules/bot/dto/bot-order.response';
+import {
+  BotDailyCloseResponse,
+  BotPaymentResponse,
+} from '@/modules/bot/dto/bot-payment.response';
 import { CreateBotNotificationDto } from '@/modules/bot/dto/create-bot-notification.dto';
+import { FindBotCustomerDto } from '@/modules/bot/dto/find-bot-customer.dto';
 import { OpenBotOrderDto } from '@/modules/bot/dto/open-bot-order.dto';
+import { RecordBotPaymentDto } from '@/modules/bot/dto/record-bot-payment.dto';
+import { UpdateBotCustomerDto } from '@/modules/bot/dto/update-bot-customer.dto';
 import { UpdateBotOrderDto } from '@/modules/bot/dto/update-bot-order.dto';
 import { BotKeyGuard } from '@/modules/bot/guards/bot-key.guard';
 import { BotConfigService } from '@/modules/bot/services/bot-config.service';
+import { RestaurantCustomersService } from '@/modules/customers/services/restaurant-customers.service';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { OrderSource } from '@/modules/orders/enums/order.enums';
@@ -41,6 +51,7 @@ import {
   OrderAccountsService,
   RoundResult,
 } from '@/modules/orders/services/order-accounts.service';
+import { OrderPaymentsService } from '@/modules/orders/services/order-payments.service';
 import {
   toOrderView,
   toRoundView,
@@ -66,6 +77,8 @@ export class BotController {
   constructor(
     private readonly botConfigService: BotConfigService,
     private readonly accounts: OrderAccountsService,
+    private readonly payments: OrderPaymentsService,
+    private readonly customers: RestaurantCustomersService,
     private readonly notificationsService: NotificationsService,
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
@@ -136,7 +149,7 @@ export class BotController {
   @ApiOperation({
     summary: 'Avanza el estado de la cuenta',
     description:
-      'Avisa a caja al pedir la cuenta y al elegir pagar con el mesero. Un cambio de estado no permitido responde 409.',
+      'Avisa a caja al pedir la cuenta y al elegir pagar con el mesero. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina: toma de la respuesta los importes del link. Un cambio de estado no permitido responde 409.',
   })
   @ApiOkResponse({ type: BotOrderResponse })
   async updateOrder(
@@ -144,9 +157,86 @@ export class BotController {
     @Param('code') code: string,
     @Body() dto: UpdateBotOrderDto,
   ) {
-    const order = await this.accounts.updateFromBot(branchId, code, dto.status);
+    const { order, walletBalance, walletCapped } =
+      await this.accounts.updateFromBot(branchId, code, dto);
 
-    return { order: toOrderView(order) };
+    return { order: toOrderView(order), walletBalance, walletCapped };
+  }
+
+  @Post('payments')
+  @ApiOperation({
+    summary: 'Registra un pago aprobado por Mercado Pago',
+    description:
+      'Reenviar el mismo `providerPaymentId` no lo procesa dos veces: responde 200 con `created: false`. La API cierra la cuenta, abona el cashback y avisa a caja. Un pago que no cuadra se guarda igual: revisa `status`.',
+  })
+  @ApiCreatedResponse({ type: BotPaymentResponse })
+  @ApiOkResponse({ type: BotPaymentResponse, description: 'Era un reintento' })
+  async recordPayment(
+    @BotBranchId() branchId: string,
+    @Body() dto: RecordBotPaymentDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const { created, payment, order } = await this.payments.record(
+      branchId,
+      dto,
+    );
+
+    response.status(created ? HttpStatus.CREATED : HttpStatus.OK);
+
+    return {
+      created,
+      status: payment.status,
+      cashback: Number(payment.cashbackEarned),
+      walletBalance: await this.customers.balanceOf(
+        branchId,
+        order?.customerId ?? null,
+      ),
+      order: order && toOrderView(order),
+    };
+  }
+
+  @Post('daily-close')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Cierra las cuentas de WhatsApp que nadie pidió',
+    description:
+      'Pasan a `auto_closed`, sin cashback. Solo toca cuentas en `open`: las que ya tienen un cobro en curso y las del personal las cierra caja. Repetirlo no hace nada.',
+  })
+  @ApiOkResponse({ type: BotDailyCloseResponse })
+  async dailyClose(@BotBranchId() branchId: string) {
+    const orders = await this.accounts.closeDay(branchId);
+
+    return { closed: orders.map((order) => order.code) };
+  }
+
+  // El teléfono va en el cuerpo: en la URL quedaría en los logs de Render.
+  @Post('customers/lookup')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Visitas, promociones y saldo del comensal en este restaurante',
+    description:
+      'Si nunca ha venido responde 200 con `known: false` y el saldo en cero.',
+  })
+  @ApiOkResponse({ type: BotCustomerResponse })
+  findCustomer(
+    @BotBranchId() branchId: string,
+    @Body() dto: FindBotCustomerDto,
+  ) {
+    return this.customers.findProfile(branchId, dto.phone);
+  }
+
+  @Patch('customers')
+  @ApiOperation({
+    summary: 'Guarda el nombre y la respuesta a promociones del comensal',
+    description:
+      'Con `unsubscribed: true` queda dado de baja de las promociones. Si no existe, lo crea.',
+  })
+  @ApiOkResponse({ type: BotCustomerResponse })
+  updateCustomer(
+    @BotBranchId() branchId: string,
+    @Body() dto: UpdateBotCustomerDto,
+  ) {
+    return this.customers.updateProfile(branchId, dto);
   }
 
   @Post('notifications')

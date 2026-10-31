@@ -1,9 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
+import { In, Raw, Repository } from 'typeorm';
 import { TranslationService } from '@/common/services/translation.service';
 import { Order } from '@/modules/orders/entities/order.entity';
-import { ACTIVE_ORDER_STATUSES } from '@/modules/orders/enums/order.enums';
+import {
+  ACTIVE_ORDER_STATUSES,
+  OrderStatus,
+} from '@/modules/orders/enums/order.enums';
 import { findAllOrdersUseCase } from '@/modules/orders/use-cases/orders/find-all-orders.use-case';
 import { findOneOrderUseCase } from '@/modules/orders/use-cases/orders/find-one-order.use-case';
 
@@ -46,9 +49,20 @@ export class OrdersService {
     });
   }
 
+  /** Una cuenta pagada sigue visible mientras cocina tenga comandas por entregar. */
   findActive(branchId: string): Promise<Order[]> {
     return this.orderRepository.find({
-      where: { branchId, status: In(ACTIVE_ORDER_STATUSES) },
+      where: [
+        { branchId, status: In(ACTIVE_ORDER_STATUSES) },
+        {
+          branchId,
+          status: OrderStatus.PAID,
+          id: Raw(
+            (alias) =>
+              `${alias} IN (SELECT "orderId" FROM "order_rounds" WHERE "status" IN ('new', 'preparing') AND "deletedAt" IS NULL)`,
+          ),
+        },
+      ],
       relations: { rounds: { items: true } },
       order: { openedAt: 'ASC' },
     });
