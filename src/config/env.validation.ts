@@ -35,6 +35,12 @@ export class EnvironmentVariables {
   @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
   QR_BASE_URL?: string;
 
+  // Firma de los avisos a n8n. Sin él no se envían.
+  @IsOptional()
+  @IsString()
+  @MinLength(32)
+  BOT_WEBHOOK_SECRET?: string;
+
   // Documentación de la API (/docs). Sin estas dos no se publica en producción.
   @IsOptional()
   @IsString()

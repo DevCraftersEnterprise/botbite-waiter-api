@@ -8,11 +8,13 @@ import {
   Delete,
   ParseIntPipe,
   Query,
+  UseInterceptors,
 } from '@nestjs/common';
 import { CategoriesService } from '@/modules/categories/categories.service';
 import { CreateCategoryDto } from '@/modules/categories/dto/create-category.dto';
 import { UpdateCategoryDto } from '@/modules/categories/dto/update-category.dto';
 import { Lang } from '@/common/decorators/lang.decorator';
+import { CatalogChangedInterceptor } from '@/modules/bot-events/catalog-changed.interceptor';
 import { AccessControlService } from '@/core/access/access-control.service';
 import { Auth } from '@/core/auth/decorators/auth.decorator';
 import { CurrentUser } from '@/core/auth/decorators/current-user.decorator';
@@ -23,6 +25,7 @@ import { User } from '@/modules/users/entities/user.entity';
 const CATEGORY_ROLES = [UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT];
 
 @Controller('categories')
+@UseInterceptors(CatalogChangedInterceptor)
 export class CategoriesController {
   constructor(
     private readonly categoriesService: CategoriesService,

@@ -50,6 +50,10 @@ export default () => {
       limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
       loginLimit: parseInt(process.env.THROTTLE_LOGIN_LIMIT ?? '5', 10),
     },
+    bot: {
+      // Firma los avisos a n8n. Sin él no se envían.
+      webhookSecret: process.env.BOT_WEBHOOK_SECRET,
+    },
     docs: {
       user: process.env.DOCS_USER,
       password: process.env.DOCS_PASSWORD,
