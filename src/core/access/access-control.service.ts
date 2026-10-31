@@ -13,6 +13,7 @@ import { Branch } from '@/modules/branches/entities/branch.entity';
 import { Category } from '@/modules/categories/entities/category.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
+import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
@@ -160,6 +161,26 @@ export class AccessControlService {
       .getRawOne<Tenancy>();
 
     await this.assertTenancy(user, row, staffScope, 'order', orderId);
+  }
+
+  async assertRoundAccess(
+    user: AccessUser,
+    roundId: string,
+    staffScope: StaffScope = 'none',
+  ): Promise<void> {
+    const row = await this.dataSource
+      .getRepository(OrderRound)
+      .createQueryBuilder('round')
+      .innerJoin('round.order', 'order')
+      .innerJoin('order.branch', 'branch')
+      .innerJoin('branch.restaurant', 'restaurant')
+      .select('restaurant.userId', 'ownerId')
+      .addSelect('restaurant.id', 'restaurantId')
+      .addSelect('branch.id', 'branchId')
+      .where('round.id = :roundId', { roundId })
+      .getRawOne<Tenancy>();
+
+    await this.assertTenancy(user, row, staffScope, 'round', roundId);
   }
 
   async assertNotificationAccess(

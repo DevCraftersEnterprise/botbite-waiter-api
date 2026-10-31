@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Lang } from '@/common/decorators/lang.decorator';
+import { CatalogChangedInterceptor } from '@/modules/bot-events/catalog-changed.interceptor';
 import {
   assertFileContent,
   uploadOptions,
@@ -33,6 +34,7 @@ import { User } from '@/modules/users/entities/user.entity';
 const MENU_ROLES = [UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT];
 
 @Controller('menus')
+@UseInterceptors(CatalogChangedInterceptor)
 export class MenusController {
   constructor(
     private readonly menusService: MenusService,

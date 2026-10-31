@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Lang } from '@/common/decorators/lang.decorator';
+import { CatalogChangedInterceptor } from '@/modules/bot-events/catalog-changed.interceptor';
 import {
   assertFileContent,
   uploadOptions,
@@ -28,6 +29,7 @@ import { ProductsService } from '@/modules/products/products.service';
 import { User } from '@/modules/users/entities/user.entity';
 
 @Controller('products')
+@UseInterceptors(CatalogChangedInterceptor)
 export class ProductsController {
   constructor(
     private readonly productsService: ProductsService,

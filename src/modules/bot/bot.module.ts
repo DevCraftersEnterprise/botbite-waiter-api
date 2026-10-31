@@ -8,9 +8,16 @@ import { BotConfigService } from '@/modules/bot/services/bot-config.service';
 import { BotKeysService } from '@/modules/bot/services/bot-keys.service';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
+import { NotificationsModule } from '@/modules/notifications/notifications.module';
+import { Order } from '@/modules/orders/entities/order.entity';
+import { OrdersModule } from '@/modules/orders/orders.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([BotApiKey, Branch, Menu])],
+  imports: [
+    TypeOrmModule.forFeature([BotApiKey, Branch, Menu, Order]),
+    OrdersModule,
+    NotificationsModule,
+  ],
   controllers: [BotController, BotAdminController],
   providers: [BotKeysService, BotConfigService, BotKeyGuard],
 })

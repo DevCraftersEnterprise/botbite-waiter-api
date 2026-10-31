@@ -17,6 +17,7 @@ import { CategoriesModule } from '@/modules/categories/categories.module';
 import { CustomersModule } from '@/modules/customers/customers.module';
 import { HealthModule } from '@/modules/health/health.module';
 import { MenusModule } from '@/modules/menus/menus.module';
+import { BotEventsModule } from '@/modules/bot-events/bot-events.module';
 import { BotModule } from '@/modules/bot/bot.module';
 import { NotificationsModule } from '@/modules/notifications/notifications.module';
 import { OrdersModule } from '@/modules/orders/orders.module';
@@ -70,6 +71,7 @@ import { UsersModule } from '@/modules/users/users.module';
     OrdersModule,
     CustomersModule,
     NotificationsModule,
+    BotEventsModule,
     BotModule,
     HealthModule,
   ],

@@ -1,10 +1,12 @@
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import * as argon2 from 'argon2';
+import { createServer, Server } from 'http';
 import { AddressInfo } from 'net';
 import { io, Socket } from 'socket.io-client';
 import request from 'supertest';
 import { DataSource } from 'typeorm';
+import { signBotEvent } from '@/modules/bot-events/bot-events.service';
 import { AppModule } from '@/app.module';
 import { configureApp } from '@/app.setup';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
@@ -14,6 +16,7 @@ import { Customer } from '@/modules/customers/entities/customer.entity';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
+import { Order } from '@/modules/orders/entities/order.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
 import { User } from '@/modules/users/entities/user.entity';
@@ -35,6 +38,7 @@ interface Seed {
   category: Category;
   menu: Menu;
   menuItem: MenuItem;
+  foreignMenuItem: MenuItem;
   notification: CashierNotification;
 }
 
@@ -802,24 +806,10 @@ describe('BotBite API (e2e)', () => {
         .expect(200);
 
       const { paths } = res.body as { paths: Record<string, unknown> };
-      expect(Object.keys(paths)).toEqual(['/v1/bot/branch']);
-    });
-  });
-
-  describe('orders', () => {
-    it('creates an order with its items', async () => {
-      const token = await tokenFor(seed.clientA.email);
-      const res = await http()
-        .post('/v1/orders')
-        .set(auth(token))
-        .send({
-          branchId: seed.branchA.id,
-          customerId: seed.customer.id,
-          orderItems: [{ menuItemId: seed.menuItem.id, price: 25 }],
-        })
-        .expect(201);
-
-      expect(Number(res.body.order.total)).toBe(25);
+      const routes = Object.keys(paths);
+      expect(routes).toContain('/v1/bot/branch');
+      expect(routes).toContain('/v1/bot/orders');
+      expect(routes.every((route) => route.startsWith('/v1/bot/'))).toBe(true);
     });
   });
 
@@ -887,6 +877,636 @@ describe('BotBite API (e2e)', () => {
 
     it('the WhatsApp webhook no longer exists', async () => {
       await http().post('/v1/messages/webhook').send({}).expect(404);
+    });
+  });
+
+  describe('accounts', () => {
+    const PHONE = '5216441223454';
+    const ordersUrl = '/v1/bot/orders';
+    let secret: string;
+    let ownerToken: string;
+    let otherToken: string;
+    let codeCounter = 0;
+
+    const nextCode = () => `CTEST${++codeCounter}`;
+    const bot = () => ({ 'X-BotBite-Key': secret });
+    const item = (quantity = 2, note?: string) => ({
+      menuItemId: seed.menuItem.id,
+      quantity,
+      ...(note && { note }),
+    });
+    const openAccount = (code: string, extra: object = {}) =>
+      http()
+        .post(ordersUrl)
+        .set(bot())
+        .send({
+          code,
+          phone: PHONE,
+          table: 'A5',
+          customerName: 'Sergio',
+          items: [item()],
+          ...extra,
+        });
+    const setStatus = (code: string, status: string) =>
+      http().patch(`${ordersUrl}/${code}`).set(bot()).send({ status });
+    const notificationsOf = (orderId: unknown) =>
+      dataSource.getRepository(CashierNotification).find({
+        where: { orderId: orderId as string },
+        order: { createdAt: 'ASC' },
+      });
+    const roundIdOf = async (code: string, number: number) => {
+      const order = await dataSource.getRepository(Order).findOneOrFail({
+        where: { code },
+        relations: { rounds: true },
+      });
+      return order.rounds.find((round) => round.number === number)!.id;
+    };
+    const activeOrders = async () => {
+      const res = await http()
+        .get(`/v1/orders/active?branchId=${seed.branchA.id}`)
+        .set(auth(ownerToken))
+        .expect(200);
+      return res.body.orders as {
+        id: string;
+        code: string;
+        status: string;
+        total: number;
+        rounds: { number: number; status: string }[];
+      }[];
+    };
+
+    beforeAll(async () => {
+      await dataSource
+        .getRepository(MenuItem)
+        .update({ id: seed.menuItem.id }, { price: 25 });
+      // Una prueba anterior deja un dominio inexistente: resolverlo en cada aviso
+      // ocupa los hilos de DNS y hace esperar a las conexiones a localhost.
+      await dataSource
+        .getRepository(Branch)
+        .update({ id: seed.branchA.id }, { botBaseUrl: null });
+
+      ownerToken = await tokenFor(seed.clientA.email);
+      otherToken = await tokenFor(seed.clientB.email);
+      const admin = await tokenFor(seed.superUser.email);
+      const key = await http()
+        .post(`/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/bot-keys`)
+        .set(auth(admin))
+        .send({ name: 'n8n cuentas' })
+        .expect(201);
+      secret = key.body.secret;
+    });
+
+    it('opens the account with its first round and prices from the menu', async () => {
+      const res = await openAccount('CFIRST').expect(201);
+
+      expect(res.body.created).toBe(true);
+      expect(res.body.order).toMatchObject({
+        code: 'CFIRST',
+        source: 'whatsapp',
+        status: 'open',
+        table: 'A5',
+        subtotal: 50,
+        total: 50,
+      });
+      expect(res.body.round).toMatchObject({ number: 1, status: 'new' });
+      expect(res.body.round.items[0]).toMatchObject({
+        name: 'TACO AL PASTOR',
+        category: 'TACOS',
+        quantity: 2,
+        price: 25,
+      });
+
+      const customer = await dataSource
+        .getRepository(Customer)
+        .findOneByOrFail({ phone: `+${PHONE}` });
+      expect(customer.name).toBe('Sergio');
+
+      const [notification] = await notificationsOf(res.body.order.id);
+      expect(notification.type).toBe('order');
+      expect(notification.message).toContain('Sergio en la mesa A5 ha pedido');
+      expect(notification.phoneNumber).toBe(`+${PHONE}`);
+      expect(notification.roundId).toBe(res.body.round.id);
+    });
+
+    it('warns the cashier when the location was not verified', async () => {
+      const unverified = await openAccount(nextCode()).expect(201);
+      const verified = await openAccount(nextCode(), {
+        locationVerified: true,
+      }).expect(201);
+
+      const [first] = await notificationsOf(unverified.body.order.id);
+      const [second] = await notificationsOf(verified.body.order.id);
+      expect(first.message).toContain('POR CONFIRMAR CON EL MESERO');
+      expect(second.message).not.toContain('POR CONFIRMAR');
+    });
+
+    it('a retried account creates nothing', async () => {
+      const code = nextCode();
+      const first = await openAccount(code).expect(201);
+      const retry = await openAccount(code).expect(200);
+
+      expect(retry.body.created).toBe(false);
+      expect(retry.body.order.id).toBe(first.body.order.id);
+      expect(retry.body.round.id).toBe(first.body.round.id);
+      expect(await notificationsOf(first.body.order.id)).toHaveLength(1);
+    });
+
+    it('adds rounds, updates the total and ignores retries', async () => {
+      const code = nextCode();
+      const { body } = await openAccount(code).expect(201);
+      const send = () =>
+        http()
+          .post(`${ordersUrl}/${code}/rounds`)
+          .set(bot())
+          .send({ number: 2, items: [item(1, 'sin cebolla')] });
+
+      const second = await send().expect(201);
+      expect(second.body.order.total).toBe(75);
+      expect(second.body.round.items[0].note).toBe('sin cebolla');
+
+      const retry = await send().expect(200);
+      expect(retry.body.created).toBe(false);
+      expect(retry.body.round.id).toBe(second.body.round.id);
+      expect(retry.body.order.total).toBe(75);
+      expect(await notificationsOf(body.order.id)).toHaveLength(2);
+    });
+
+    it('rejects dishes of another branch and prices sent by the bot', async () => {
+      const code = nextCode();
+      await openAccount(code, {
+        items: [{ menuItemId: seed.foreignMenuItem.id, quantity: 1 }],
+      }).expect(400);
+
+      const orders = dataSource.getRepository(Order);
+      expect(await orders.existsBy({ code })).toBe(false);
+
+      await openAccount(code, {
+        items: [{ ...item(), price: 1 }],
+      }).expect(400);
+    });
+
+    it('validates quantities', async () => {
+      await openAccount(nextCode(), { items: [item(0)] }).expect(400);
+      await openAccount(nextCode(), { items: [item(51)] }).expect(400);
+      await openAccount(nextCode(), { items: [] }).expect(400);
+    });
+
+    it('a key cannot touch accounts of another branch', async () => {
+      const code = nextCode();
+      await openAccount(code).expect(201);
+
+      const admin = await tokenFor(seed.superUser.email);
+      const branches = dataSource.getRepository(Branch);
+      const other = await branches.save(
+        branches.create({
+          name: 'Otra',
+          slug: 'otra',
+          address: 'Calle 9',
+          restaurantId: seed.restaurantA.id,
+        }),
+      );
+      const key = await http()
+        .post(`/v1/branches/${seed.restaurantA.id}/${other.id}/bot-keys`)
+        .set(auth(admin))
+        .send({ name: 'otra' })
+        .expect(201);
+      const otherKey = { 'X-BotBite-Key': key.body.secret as string };
+
+      await http()
+        .post(`${ordersUrl}/${code}/rounds`)
+        .set(otherKey)
+        .send({ number: 2, items: [item()] })
+        .expect(404);
+      await http()
+        .patch(`${ordersUrl}/${code}`)
+        .set(otherKey)
+        .send({ status: 'bill_requested' })
+        .expect(404);
+      await http()
+        .post(ordersUrl)
+        .set(otherKey)
+        .send({
+          code,
+          phone: PHONE,
+          table: '1',
+          items: [item()],
+        })
+        .expect(409);
+    });
+
+    it('follows the bill flow and tells the cashier', async () => {
+      const code = nextCode();
+      const { body } = await openAccount(code).expect(201);
+
+      await setStatus(code, 'with_waiter').expect(409);
+
+      const billed = await setStatus(code, 'bill_requested').expect(200);
+      expect(billed.body.order.billRequestedAt).not.toBeNull();
+
+      // Repetir el aviso no genera otra notificación.
+      await setStatus(code, 'bill_requested').expect(200);
+
+      // Con la cuenta pedida ya no se agrega nada.
+      await http()
+        .post(`${ordersUrl}/${code}/rounds`)
+        .set(bot())
+        .send({ number: 2, items: [item()] })
+        .expect(409);
+
+      const waiter = await setStatus(code, 'with_waiter').expect(200);
+      expect(waiter.body.order.paymentMethod).toBe('waiter');
+
+      const notifications = await notificationsOf(body.order.id);
+      expect(notifications.map((n) => n.type)).toEqual([
+        'order',
+        'bill',
+        'pay_with_waiter',
+      ]);
+    });
+
+    it('the bot cannot set statuses reserved to payments or the cashier', async () => {
+      const code = nextCode();
+      await openAccount(code).expect(201);
+
+      for (const status of ['paid', 'settled', 'cancelled', 'open']) {
+        await setStatus(code, status).expect(400);
+      }
+    });
+
+    it('the panel sees active accounts and moves the rounds', async () => {
+      const code = nextCode();
+      await openAccount(code).expect(201);
+      const roundId = await roundIdOf(code, 1);
+      const roundUrl = `/v1/orders/rounds/${roundId}`;
+
+      const account = (await activeOrders()).find((o) => o.code === code);
+      expect(account?.rounds[0]).toMatchObject({ number: 1, status: 'new' });
+
+      await http()
+        .patch(roundUrl)
+        .set(auth(otherToken))
+        .send({ status: 'preparing' })
+        .expect(403);
+
+      const preparing = await http()
+        .patch(roundUrl)
+        .set(auth(ownerToken))
+        .send({ status: 'preparing' })
+        .expect(200);
+      expect(preparing.body.round.acknowledgedAt).not.toBeNull();
+
+      await http()
+        .patch(roundUrl)
+        .set(auth(ownerToken))
+        .send({ status: 'new' })
+        .expect(400);
+
+      const delivered = await http()
+        .patch(roundUrl)
+        .set(auth(ownerToken))
+        .send({ status: 'delivered' })
+        .expect(200);
+      expect(delivered.body.round.deliveredAt).not.toBeNull();
+
+      await http()
+        .patch(roundUrl)
+        .set(auth(ownerToken))
+        .send({ status: 'cancelled' })
+        .expect(409);
+    });
+
+    it('cancelling a round takes it out of the total', async () => {
+      const code = nextCode();
+      await openAccount(code).expect(201);
+      await http()
+        .post(`${ordersUrl}/${code}/rounds`)
+        .set(bot())
+        .send({ number: 2, items: [item(1)] })
+        .expect(201);
+
+      await http()
+        .patch(`/v1/orders/rounds/${await roundIdOf(code, 1)}`)
+        .set(auth(ownerToken))
+        .send({ status: 'cancelled' })
+        .expect(200);
+
+      const account = (await activeOrders()).find((o) => o.code === code);
+      expect(account?.total).toBe(25);
+    });
+
+    it('the cashier settles an account and it leaves the active list', async () => {
+      const code = nextCode();
+      const { body } = await openAccount(code).expect(201);
+      const url = `/v1/orders/${body.order.id}/settle`;
+
+      await http().post(url).set(auth(otherToken)).expect(403);
+
+      const settled = await http().post(url).set(auth(ownerToken)).expect(200);
+      expect(settled.body.order).toMatchObject({
+        status: 'settled',
+        paymentMethod: 'waiter',
+      });
+      expect(settled.body.order.closedAt).not.toBeNull();
+
+      expect((await activeOrders()).some((o) => o.code === code)).toBe(false);
+
+      await http().post(url).set(auth(ownerToken)).expect(409);
+      await http()
+        .post(`${ordersUrl}/${code}/rounds`)
+        .set(bot())
+        .send({ number: 2, items: [item()] })
+        .expect(409);
+    });
+
+    it('staff open their own accounts, without a customer', async () => {
+      const res = await http()
+        .post('/v1/orders/tabs')
+        .set(auth(ownerToken))
+        .send({
+          branchId: seed.branchA.id,
+          table: 'BARRA',
+          customerName: 'Don Pepe',
+          items: [item(1)],
+        })
+        .expect(201);
+
+      expect(res.body.order).toMatchObject({
+        source: 'staff',
+        status: 'open',
+        table: 'BARRA',
+        total: 25,
+      });
+      expect(res.body.order.code).toMatch(/^S[A-F0-9]{10}$/);
+
+      const round = await http()
+        .post(`/v1/orders/${res.body.order.id}/rounds`)
+        .set(auth(ownerToken))
+        .send({ items: [item(2)] })
+        .expect(201);
+      expect(round.body.round.number).toBe(2);
+      expect(round.body.order.total).toBe(75);
+
+      await http()
+        .post('/v1/orders/tabs')
+        .set(auth(otherToken))
+        .send({ branchId: seed.branchA.id, table: '1', items: [item()] })
+        .expect(403);
+    });
+
+    it('rounds of a WhatsApp account only come from the bot', async () => {
+      const { body } = await openAccount(nextCode()).expect(201);
+
+      await http()
+        .post(`/v1/orders/${body.order.id}/rounds`)
+        .set(auth(ownerToken))
+        .send({ items: [item()] })
+        .expect(409);
+    });
+
+    it('the old write routes no longer exist', async () => {
+      await http()
+        .post('/v1/orders')
+        .set(auth(ownerToken))
+        .send({})
+        .expect(404);
+    });
+
+    it('staff read the catalog of their branch to open accounts', async () => {
+      const url = `/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/catalog`;
+      const res = await http().get(url).set(auth(ownerToken)).expect(200);
+
+      expect(res.body.catalog[0].id).toBe(seed.menuItem.id);
+      await http().get(url).set(auth(otherToken)).expect(403);
+    });
+
+    it('shows the indicators of the day', async () => {
+      const res = await http()
+        .get(`/v1/orders/summary?branchId=${seed.branchA.id}`)
+        .set(auth(ownerToken))
+        .expect(200);
+
+      expect(res.body.accounts).toBeGreaterThan(0);
+      expect(res.body.openAccounts).toBeGreaterThan(0);
+      expect(res.body.paidWithWaiter).toBeGreaterThan(0);
+      expect(res.body.sales).toBeGreaterThan(0);
+      expect(res.body.averageTicket).toBeGreaterThan(0);
+    });
+
+    it('accepts free alerts for the cashier', async () => {
+      const url = '/v1/bot/notifications';
+
+      const created = await http()
+        .post(url)
+        .set(bot())
+        .send({ type: 'alert', message: 'Pago sin cuenta asociada' })
+        .expect(201);
+      const notification = await dataSource
+        .getRepository(CashierNotification)
+        .findOneByOrFail({ id: created.body.id });
+      expect(notification.type).toBe('alert');
+
+      await http()
+        .post(url)
+        .set(bot())
+        .send({ type: 'alert', message: 'x', orderCode: 'NOEXISTE' })
+        .expect(404);
+      await http()
+        .post(url)
+        .set(bot())
+        .send({ type: 'order', message: 'x' })
+        .expect(400);
+    });
+
+    describe('under load', () => {
+      it('opens many accounts at once, each with its retries', async () => {
+        const codes = Array.from({ length: 15 }, () => nextCode());
+
+        const responses = await Promise.all(
+          codes.flatMap((code) => [
+            openAccount(code),
+            openAccount(code),
+            openAccount(code),
+          ]),
+        );
+
+        expect(responses.filter((r) => r.status === 201)).toHaveLength(15);
+        expect(responses.every((r) => [200, 201].includes(r.status))).toBe(
+          true,
+        );
+
+        for (const code of codes) {
+          const order = await dataSource
+            .getRepository(Order)
+            .findOneOrFail({ where: { code }, relations: { rounds: true } });
+          expect(order.rounds).toHaveLength(1);
+          expect(Number(order.total)).toBe(50);
+          expect(await notificationsOf(order.id)).toHaveLength(1);
+        }
+      });
+
+      it('keeps the total right with rounds at the same time', async () => {
+        const code = nextCode();
+        await openAccount(code, { items: [item(1)] }).expect(201);
+
+        const rounds = Array.from({ length: 8 }, (_, index) => index + 2);
+        const responses = await Promise.all(
+          rounds.map((number) =>
+            http()
+              .post(`${ordersUrl}/${code}/rounds`)
+              .set(bot())
+              .send({ number, items: [item(1)] }),
+          ),
+        );
+
+        expect(responses.every((r) => r.status === 201)).toBe(true);
+
+        const account = (await activeOrders()).find((o) => o.code === code);
+        expect(account?.rounds).toHaveLength(9);
+        expect(account?.total).toBe(225);
+      });
+    });
+
+    describe('events to n8n', () => {
+      interface ReceivedEvent {
+        type: string;
+        branchId: string;
+        data: Record<string, unknown>;
+      }
+      const received: ReceivedEvent[] = [];
+      const invalid: string[] = [];
+      let server: Server;
+
+      const waitForEvent = async (type: string, ms = 6000) => {
+        const start = Date.now();
+        while (Date.now() - start < ms) {
+          const event = received.find((e) => e.type === type);
+          if (event) return event;
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        throw new Error(`Event not received: ${type}`);
+      };
+
+      beforeAll(async () => {
+        // Hace de n8n: recibe los avisos y valida su firma.
+        server = createServer((req, res) => {
+          let body = '';
+          req.setEncoding('utf8');
+          req.on('data', (chunk: string) => (body += chunk));
+          req.on('end', () => {
+            const timestamp = req.headers['x-botbite-timestamp'] as string;
+            const expected = signBotEvent(
+              process.env.BOT_WEBHOOK_SECRET!,
+              timestamp,
+              body,
+            );
+            if (
+              req.url !== '/webhook/mesero-centro/portal-evento' ||
+              req.headers['x-botbite-signature'] !== expected
+            ) {
+              invalid.push(body);
+            }
+            received.push(JSON.parse(body) as ReceivedEvent);
+            res.end('ok');
+          });
+        });
+        await new Promise<void>((resolve) => server.listen(0, resolve));
+
+        const { port } = server.address() as AddressInfo;
+        await dataSource.getRepository(Branch).update(
+          { id: seed.branchA.id },
+          {
+            botBaseUrl: `http://127.0.0.1:${port}/webhook/mesero-centro`,
+          },
+        );
+      });
+
+      afterAll(async () => {
+        await new Promise((resolve) => server.close(resolve));
+        await dataSource
+          .getRepository(Branch)
+          .update({ id: seed.branchA.id }, { botBaseUrl: null });
+      });
+
+      beforeEach(() => {
+        received.length = 0;
+      });
+
+      it('tells the bot when a round changes, so the diner gets a message', async () => {
+        const code = nextCode();
+        await openAccount(code, { language: 'en' }).expect(201);
+
+        await http()
+          .patch(`/v1/orders/rounds/${await roundIdOf(code, 1)}`)
+          .set(auth(ownerToken))
+          .send({ status: 'preparing' })
+          .expect(200);
+
+        const event = await waitForEvent('round.status_changed');
+        expect(event.branchId).toBe(seed.branchA.id);
+        expect(event.data).toEqual({
+          orderCode: code,
+          roundNumber: 1,
+          status: 'preparing',
+          table: 'A5',
+          language: 'en',
+          phone: `+${PHONE}`,
+        });
+      });
+
+      it('tells the bot when the cashier closes an account', async () => {
+        const code = nextCode();
+        const { body } = await openAccount(code).expect(201);
+
+        await http()
+          .post(`/v1/orders/${body.order.id}/settle`)
+          .set(auth(ownerToken))
+          .expect(200);
+
+        const event = await waitForEvent('order.closed');
+        expect(event.data).toEqual({
+          orderCode: code,
+          status: 'settled',
+          phone: `+${PHONE}`,
+        });
+      });
+
+      it('does not announce accounts opened by staff', async () => {
+        const res = await http()
+          .post('/v1/orders/tabs')
+          .set(auth(ownerToken))
+          .send({ branchId: seed.branchA.id, table: '1', items: [item()] })
+          .expect(201);
+
+        await http()
+          .post(`/v1/orders/${res.body.order.id}/settle`)
+          .set(auth(ownerToken))
+          .expect(200);
+
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(received.some((e) => e.type === 'order.closed')).toBe(false);
+      });
+
+      it('announces catalog changes once per burst', async () => {
+        const url = `/v1/menus/menu/${seed.menu.id}/items/${seed.menuItem.id}`;
+
+        for (const price of [26, 27, 25]) {
+          await http()
+            .patch(url)
+            .set(auth(ownerToken))
+            .send({ price })
+            .expect(200);
+        }
+
+        await waitForEvent('catalog.changed');
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(
+          received.filter((e) => e.type === 'catalog.changed'),
+        ).toHaveLength(1);
+      });
+
+      it('every event carried a valid signature', () => {
+        expect(invalid).toEqual([]);
+      });
     });
   });
 
@@ -993,6 +1613,8 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
     branches.create({
       name: 'Centro',
       slug: 'centro',
+      // El Postgres embebido de las pruebas no trae todas las zonas horarias.
+      timezone: 'America/Mexico_City',
       address: 'Calle 1',
       restaurantId: restaurantA.id,
       phoneNumberAssistant: ASSISTANT_PHONE,
@@ -1026,6 +1648,26 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
     price: 25,
   });
 
+  const foreignCategory = await dataSource
+    .getRepository(Category)
+    .save({ name: 'AJENOS', restaurantId: restaurantB.id });
+  const foreignProduct = await dataSource
+    .getRepository(Product)
+    .save(
+      dataSource
+        .getRepository(Product)
+        .create({ name: 'Ajeno', restaurantId: restaurantB.id }),
+    );
+  const foreignMenu = await dataSource
+    .getRepository(Menu)
+    .save({ name: 'Principal', branchId: branchB.id });
+  const foreignMenuItem = await dataSource.getRepository(MenuItem).save({
+    menuId: foreignMenu.id,
+    productId: foreignProduct.id,
+    categoryId: foreignCategory.id,
+    price: 99,
+  });
+
   const customer = await dataSource
     .getRepository(Customer)
     .save({ name: 'Ana', phone: CUSTOMER_PHONE });
@@ -1049,6 +1691,7 @@ async function seedData(dataSource: DataSource): Promise<Seed> {
     category,
     menu,
     menuItem,
+    foreignMenuItem,
     notification,
   };
 }

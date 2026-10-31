@@ -20,6 +20,7 @@ const env: Record<string, string> = {
   CLOUDINARY_API_KEY: 'e2e',
   CLOUDINARY_API_SECRET: 'e2e',
   THROTTLE_LIMIT: '1000',
+  BOT_WEBHOOK_SECRET: 'e2e-bot-webhook-secret-0123456789abcdef',
   DOCS_USER: 'docs',
   DOCS_PASSWORD: 'e2e-docs-password',
 };
