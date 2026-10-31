@@ -5,8 +5,12 @@ import {
   IsNumber,
   IsOptional,
   IsPositive,
+  IsString,
   IsUUID,
   Max,
+  MaxLength,
+  Min,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateMenuItemDto {
@@ -30,4 +34,16 @@ export class CreateMenuItemDto {
   @IsOptional()
   @IsBoolean()
   shouldRecommend?: boolean;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsString()
+  @MaxLength(100)
+  variantGroup?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Type(() => Number)
+  sortOrder?: number;
 }

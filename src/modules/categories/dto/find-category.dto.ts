@@ -1,8 +1,17 @@
-import { IsBoolean, IsOptional, IsString, MinLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MinLength,
+} from 'class-validator';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 import { Transform } from 'class-transformer';
 
 export class FindCategoryDto extends PaginationDto {
+  @IsUUID()
+  restaurantId: string;
+
   @IsOptional()
   @IsString()
   @MinLength(1, { message: 'Name must have at least 1 character' })

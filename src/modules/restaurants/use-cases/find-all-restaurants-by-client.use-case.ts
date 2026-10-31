@@ -47,6 +47,8 @@ export const findAllRestaurantsByClientUseCase = async (
     select: {
       id: true,
       name: true,
+      slug: true,
+      walletPct: true,
       logoUrl: true,
       isActive: true,
       createdAt: true,

@@ -1,4 +1,5 @@
 import { ConfiguredIoAdapter } from '@/common/adapters/configured-io.adapter';
+import { setupDocs } from '@/docs.setup';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
@@ -43,4 +44,6 @@ export const configureApp = (app: NestExpressApplication): void => {
   );
 
   app.enableShutdownHooks();
+
+  setupDocs(app);
 };

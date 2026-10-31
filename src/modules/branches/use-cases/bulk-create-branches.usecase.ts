@@ -5,6 +5,7 @@ import csv from 'csv-parser';
 import { Readable } from 'stream';
 import { Repository } from 'typeorm';
 import { TranslationService } from '@/common/services/translation.service';
+import { slugify, uniqueSlug } from '@/common/utils/slug.util';
 import { CreateBranchDto } from '@/modules/branches/dto/create-branch.dto';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import {
@@ -39,9 +40,24 @@ export class BulkCreateBranchesUseCase {
         );
       }
 
-      const newBranches = branches.map((branch) =>
-        this.branchRepository.create({ ...branch, restaurantId }),
-      );
+      const usedSlugs = new Set<string>();
+      const newBranches: Branch[] = [];
+
+      for (const branch of branches) {
+        const slug = await uniqueSlug(
+          slugify(branch.name, 'sucursal'),
+          async (candidate) =>
+            usedSlugs.has(candidate) ||
+            (await this.branchRepository.exists({
+              where: { slug: candidate },
+              withDeleted: true,
+            })),
+        );
+        usedSlugs.add(slug);
+        newBranches.push(
+          this.branchRepository.create({ ...branch, slug, restaurantId }),
+        );
+      }
 
       await this.branchRepository.save(newBranches);
 

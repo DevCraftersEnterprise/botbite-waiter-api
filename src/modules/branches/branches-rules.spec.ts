@@ -1,5 +1,5 @@
 import { buildFindOneBranchWhere } from '@/modules/branches/use-cases/find-one-branch.usecase';
-import { generateQrToken } from '@/modules/branches/utils/generate-qr-token.util';
+import { buildBranchQrUrl } from '@/modules/branches/utils/branch-qr-url.util';
 
 const BRANCH_ID = '6f1c1a5e-3b2a-4a7e-9a55-3c1f6e1d9b10';
 const RESTAURANT_ID = '0b8f2c3e-1d4a-4f6b-8e9c-7a6b5c4d3e2f';
@@ -19,13 +19,16 @@ describe('buildFindOneBranchWhere', () => {
   });
 });
 
-describe('QR tokens', () => {
-  it('generates 128-bit random tokens', () => {
-    expect(generateQrToken()).toMatch(/^QR-\d+-[a-f0-9]{32}$/);
+describe('buildBranchQrUrl', () => {
+  it('points to a fixed URL that does not depend on the bot server', () => {
+    expect(buildBranchQrUrl('https://botbite.com.mx', 'cocorit')).toBe(
+      'https://botbite.com.mx/m/cocorit',
+    );
   });
 
-  it('never repeats tokens', () => {
-    const tokens = new Set(Array.from({ length: 1000 }, generateQrToken));
-    expect(tokens.size).toBe(1000);
+  it('tolerates a trailing slash in the base URL', () => {
+    expect(buildBranchQrUrl('https://botbite.com.mx/', 'cocorit')).toBe(
+      'https://botbite.com.mx/m/cocorit',
+    );
   });
 });

@@ -1,3 +1,5 @@
+import { ConflictException, ForbiddenException } from '@nestjs/common';
+import { Not } from 'typeorm';
 import { AccessControlService } from '@/core/access/access-control.service';
 import {
   RestaurantResponse,
@@ -33,7 +35,20 @@ export const updateRestaurantUseCase = async (
 
   // Activar/desactivar restaurantes es una decisión de administración: un
   // cliente no puede reactivar un restaurante que un admin desactivó.
-  if (!AccessControlService.isPrivileged(user)) delete changes.isActive;
+  if (!AccessControlService.isPrivileged(user)) {
+    delete changes.isActive;
+    if (changes.slug !== undefined) {
+      throw new ForbiddenException('Only administrators can change the slug');
+    }
+  }
+
+  if (changes.slug) {
+    const taken = await repository.exists({
+      where: { slug: changes.slug, id: Not(restaurant.id) },
+      withDeleted: true,
+    });
+    if (taken) throw new ConflictException('The slug is already in use');
+  }
 
   await repository.update({ id: restaurant.id }, changes);
   Object.assign(restaurant, changes);

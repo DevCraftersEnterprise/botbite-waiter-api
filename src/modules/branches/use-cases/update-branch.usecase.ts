@@ -34,16 +34,8 @@ export class UpdateBranchUseCase {
       branchId,
     );
 
-    const updates: Partial<Branch> = { ...updateBranchDto };
-
-    // Si se quita el número del asistente, el QR deja de servir.
-    if (updateBranchDto.phoneNumberAssistant === null) {
-      updates.qrUrl = null;
-      updates.qrToken = null;
-    }
-
-    if (Object.keys(updates).length > 0) {
-      await this.branchRepository.update({ id: branchId }, updates);
+    if (Object.keys(updateBranchDto).length > 0) {
+      await this.branchRepository.update({ id: branchId }, updateBranchDto);
     }
 
     const { branch } = await this.findOneBranchUseCase.execute(

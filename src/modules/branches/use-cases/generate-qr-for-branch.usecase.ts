@@ -1,4 +1,5 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { createQr } from '@/common/utils/create-qr';
@@ -9,7 +10,7 @@ import {
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { QrGenerationResponse } from '@/modules/branches/interfaces/branches.interfaces';
 import { FindOneBranchUseCase } from '@/modules/branches/use-cases/find-one-branch.usecase';
-import { generateQrToken } from '@/modules/branches/utils/generate-qr-token.util';
+import { buildBranchQrUrl } from '@/modules/branches/utils/branch-qr-url.util';
 
 @Injectable()
 export class GenerateQrForBranchUseCase {
@@ -19,11 +20,12 @@ export class GenerateQrForBranchUseCase {
     @InjectRepository(Branch)
     private readonly branchRepository: Repository<Branch>,
     private readonly findOneBranchUseCase: FindOneBranchUseCase,
+    private readonly configService: ConfigService,
   ) {}
 
   /**
-   * Genera un QR nuevo. Cada generación rota el token: los QR impresos
-   * anteriormente dejan de iniciar conversaciones.
+   * Genera el QR de la sucursal. Apunta a una URL fija que redirige a la página
+   * del mesero: si el mesero cambia de servidor, el QR impreso sigue sirviendo.
    */
   async execute(
     branchId: string,
@@ -36,16 +38,10 @@ export class GenerateQrForBranchUseCase {
       restaurantId,
     );
 
-    if (!branch.phoneNumberAssistant) {
-      throw new BadRequestException(
-        'The branch needs an assistant phone number before generating a QR code',
-      );
-    }
-
-    const qrToken = generateQrToken();
-    const prefilledMessage = `🛡️ INICIO ${qrToken}`;
-    const phone = branch.phoneNumberAssistant.replace(/\D/g, '');
-    const targetUrl = `https://wa.me/${phone}?text=${encodeURIComponent(prefilledMessage)}`;
+    const targetUrl = buildBranchQrUrl(
+      this.configService.getOrThrow<string>('app.qrBaseUrl'),
+      branch.slug,
+    );
 
     const finalImage = await createQr(targetUrl);
     const uploadedImageUrl = await uploadQRToCloudinary(
@@ -56,7 +52,7 @@ export class GenerateQrForBranchUseCase {
 
     await this.branchRepository.update(
       { id: branch.id },
-      { qrUrl: uploadedImageUrl, qrToken },
+      { qrUrl: uploadedImageUrl },
     );
 
     this.logger.log(`QR code generated for branch ${branch.id}`);

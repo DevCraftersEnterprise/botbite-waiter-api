@@ -64,6 +64,7 @@ export class FindAllBranchesByRestaurantUseCase {
         phoneNumberReception: true,
         surveyUrl: true,
         qrUrl: true,
+        slug: true,
         createdAt: true,
         restaurant: {
           name: true,

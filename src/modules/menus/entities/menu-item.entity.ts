@@ -21,6 +21,13 @@ export class MenuItem extends BaseEntity {
   @Column({ default: false })
   shouldRecommend: boolean;
 
+  /** Agrupa variantes del mismo platillo para que el bot pregunte cuál quiere. */
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  variantGroup: string | null;
+
+  @Column({ type: 'int', default: 0 })
+  sortOrder: number;
+
   @ManyToOne(() => Menu, (menu) => menu.id)
   @JoinColumn({ name: 'menuId' })
   menu: Menu;
@@ -30,7 +37,7 @@ export class MenuItem extends BaseEntity {
   product: Product;
 
   @ManyToOne(() => Category, (category) => category.id, {
-    onDelete: 'SET NULL',
+    onDelete: 'RESTRICT',
   })
   @JoinColumn({ name: 'categoryId' })
   category: Category;
