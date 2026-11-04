@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Not, Repository } from 'typeorm';
+import { isBranchSlugOf } from '@/common/utils/slug.util';
 import { AccessControlService } from '@/core/access/access-control.service';
 import { BotBranchResponse } from '@/modules/bot/dto/bot-branch.response';
 import {
@@ -19,6 +20,7 @@ import {
   toBotCatalog,
 } from '@/modules/bot/utils/bot-view.util';
 import { Branch } from '@/modules/branches/entities/branch.entity';
+import { cleanTables } from '@/modules/branches/utils/table.util';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { User } from '@/modules/users/entities/user.entity';
 
@@ -84,7 +86,7 @@ export class BotConfigService {
     if (features) {
       branch.features = { ...branch.features, ...definedOnly(features) };
     }
-    if (validTables) branch.validTables = this.cleanTables(validTables);
+    if (validTables) branch.validTables = cleanTables(validTables);
     if (botBaseUrl !== undefined) {
       branch.botBaseUrl = botBaseUrl?.replace(/\/+$/, '') ?? null;
     }
@@ -99,6 +101,12 @@ export class BotConfigService {
     }
 
     await this.assertAvailable(branch, dto);
+
+    if (dto.slug && !isBranchSlugOf(branch.restaurant.slug, dto.slug)) {
+      throw new BadRequestException(
+        `The slug must start with ${branch.restaurant.slug}-`,
+      );
+    }
 
     // El QR impreso lleva el slug: si cambia, hay que generarlo de nuevo.
     if (dto.slug) branch.qrUrl = null;
@@ -148,13 +156,10 @@ export class BotConfigService {
     }
   }
 
-  private cleanTables(tables: string[]): string[] {
-    return [...new Set(tables.map((table) => table.trim()).filter(Boolean))];
-  }
-
   private async findBranch(branchId: string): Promise<Branch> {
     const branch = await this.branchRepository.findOne({
       where: { id: branchId },
+      relations: { restaurant: true },
     });
 
     if (!branch) throw new NotFoundException('Branch not found');

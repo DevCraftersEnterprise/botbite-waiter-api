@@ -32,3 +32,19 @@ export const uniqueSlug = async (
 
   return candidate;
 };
+
+/**
+ * Slug estándar de una sucursal: `<restaurante>-<sucursal>`, por ejemplo
+ * "punto-de-union-cocorit". Es único por construcción, porque el del restaurante
+ * ya lo es, y deja ver de qué negocio es cada QR, webhook y prefijo de Redis.
+ */
+export const branchSlug = (
+  restaurantSlug: string,
+  branchName: string,
+): string =>
+  slugify(`${restaurantSlug} ${branchName}`, `${restaurantSlug}-sucursal`);
+
+/** Si un slug de sucursal sigue el estándar de su restaurante. */
+export const isBranchSlugOf = (restaurantSlug: string, slug: string): boolean =>
+  slug.startsWith(`${restaurantSlug}-`) &&
+  slug.length > restaurantSlug.length + 1;

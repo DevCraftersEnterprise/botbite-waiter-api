@@ -488,8 +488,14 @@ describe('BotBite API (e2e)', () => {
           .send({ name: 'Plaza Ñandú', address: 'Calle 3' })
           .expect(201);
 
-      expect((await create()).body.branch.slug).toBe('plaza-nandu');
-      expect((await create()).body.branch.slug).toBe('plaza-nandu-2');
+      // Estándar <restaurante>-<sucursal>: único aunque otro restaurante
+      // tenga una sucursal con el mismo nombre.
+      expect((await create()).body.branch.slug).toBe(
+        'restaurante-a-plaza-nandu',
+      );
+      expect((await create()).body.branch.slug).toBe(
+        'restaurante-a-plaza-nandu-2',
+      );
     });
 
     it('new restaurants get a slug', async () => {
@@ -611,6 +617,34 @@ describe('BotBite API (e2e)', () => {
         .set(auth(admin))
         .send({ whatsappPhoneNumberId: '1439262192594415' })
         .expect(409);
+    });
+
+    it('keeps branch slugs under their restaurant', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const admin = await tokenFor(seed.superUser.email);
+      const created = await http()
+        .post(`/v1/branches/${seed.restaurantA.id}`)
+        .set(auth(owner))
+        .send({ name: 'Cócorit', address: 'Calle 9' })
+        .expect(201);
+      const { slug: restaurantSlug } = await dataSource
+        .getRepository(Restaurant)
+        .findOneByOrFail({ id: seed.restaurantA.id });
+      const url = `/v1/branches/${seed.restaurantA.id}/${created.body.branch.id}/bot-config`;
+
+      expect(created.body.branch.slug).toBe(`${restaurantSlug}-cocorit`);
+
+      await http()
+        .patch(url)
+        .set(auth(admin))
+        .send({ slug: 'cocorit' })
+        .expect(400);
+      const renamed = await http()
+        .patch(url)
+        .set(auth(admin))
+        .send({ slug: `${restaurantSlug}-cocorit-centro` })
+        .expect(200);
+      expect(renamed.body.config.slug).toBe(`${restaurantSlug}-cocorit-centro`);
     });
 
     it('rejects invalid values', async () => {
@@ -948,6 +982,10 @@ describe('BotBite API (e2e)', () => {
       await dataSource
         .getRepository(Branch)
         .update({ id: seed.branchA.id }, { botBaseUrl: null });
+      // Otra prueba deja una lista de mesas: aquí se acepta cualquiera.
+      await dataSource
+        .getRepository(Branch)
+        .update({ id: seed.branchA.id }, { validTables: [] });
 
       ownerToken = await tokenFor(seed.clientA.email);
       otherToken = await tokenFor(seed.clientB.email);
@@ -1294,6 +1332,42 @@ describe('BotBite API (e2e)', () => {
       expect(res.body.paidWithWaiter).toBeGreaterThan(0);
       expect(res.body.sales).toBeGreaterThan(0);
       expect(res.body.averageTicket).toBeGreaterThan(0);
+    });
+
+    it('only takes tables the branch accepts', async () => {
+      const branches = dataSource.getRepository(Branch);
+      const retried = nextCode();
+      await openAccount(retried, { table: '40' }).expect(201);
+      await branches.update(
+        { id: seed.branchA.id },
+        { validTables: ['A5', 'TERRAZA 2'] },
+      );
+
+      try {
+        const bot = await openAccount(nextCode(), { table: 'a5' }).expect(201);
+        expect(bot.body.order.table).toBe('A5');
+        await openAccount(nextCode(), { table: '99' }).expect(400);
+
+        const tabs = (table: string) =>
+          http()
+            .post('/v1/orders/tabs')
+            .set(auth(ownerToken))
+            .send({ branchId: seed.branchA.id, table, items: [item()] });
+        const tab = await tabs('terraza  2').expect(201);
+        expect(tab.body.order.table).toBe('TERRAZA 2');
+        await tabs('7').expect(400);
+
+        // Un reintento de una cuenta ya abierta no se vuelve a validar.
+        await openAccount(retried, { table: '40' }).expect(200);
+
+        const catalog = await http()
+          .get(`/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/catalog`)
+          .set(auth(ownerToken))
+          .expect(200);
+        expect(catalog.body.validTables).toEqual(['A5', 'TERRAZA 2']);
+      } finally {
+        await branches.update({ id: seed.branchA.id }, { validTables: [] });
+      }
     });
 
     it('accepts free alerts for the cashier', async () => {

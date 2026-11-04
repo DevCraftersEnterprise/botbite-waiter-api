@@ -64,7 +64,7 @@ export class BotAdminController {
     };
   }
 
-  /** Platillos de la sucursal para que el personal abra cuentas. */
+  /** Platillos y mesas de la sucursal para que el personal abra cuentas. */
   @Get('catalog')
   @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT, UserRoles.USER])
   async findCatalog(
@@ -78,8 +78,9 @@ export class BotAdminController {
       branchId,
       'branch',
     );
-    const { catalog } = await this.botConfigService.findBotBranch(branchId);
-    return { catalog };
+    const { catalog, branch } =
+      await this.botConfigService.findBotBranch(branchId);
+    return { catalog, validTables: branch.validTables };
   }
 
   // Las llaves dan acceso de escritura al bot: solo las administra BotBite.

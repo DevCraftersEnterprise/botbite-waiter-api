@@ -150,6 +150,10 @@ Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<c
 | `GET`, `POST` | `/v1/branches/:restaurantId/:branchId/bot-keys` | Solo admin |
 | `DELETE` | `/v1/branches/:restaurantId/:branchId/bot-keys/:keyId` | Solo admin |
 
+**Slugs:** el del restaurante es único en la plataforma y sale de su nombre (`punto-de-union`). El de la sucursal sigue el estándar `<restaurante>-<sucursal>` (`punto-de-union-cocorit`): se genera al crearla y, si un admin lo cambia, debe empezar con el del restaurante. Cambiar el slug de un restaurante no renombra sus sucursales, porque el QR impreso y el webhook dependen de ellos.
+
+**Mesas:** si la sucursal tiene lista de mesas, la API rechaza con `400` las que no están, vengan del bot o del personal, y guarda la mesa como está escrita en la lista (`a5` queda `A5`). Sin lista acepta cualquiera.
+
 **QR:** el QR impreso abre `botbite.com.mx/m/<slug>`, que redirige a la página del mesero. Si la página del QR cambia de servidor, basta con cambiar la redirección en la landing; si cambia el slug, hay que generar e imprimir el QR de nuevo.
 
 **Rutas temporales:** `GET /v1/messages/notifications`, `PATCH /v1/messages/:id/read` y `/unread` siguen respondiendo para no romper el panel mientras se despliega; las nuevas están en `/v1/notifications`. `GET /v1/messages/conversations` responde una lista vacía hasta que la pantalla de Órdenes use las cuentas nuevas.
