@@ -1,6 +1,7 @@
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import * as argon2 from 'argon2';
+import { randomUUID } from 'crypto';
 import { createServer, Server } from 'http';
 import { AddressInfo } from 'net';
 import { io, Socket } from 'socket.io-client';
@@ -12,6 +13,7 @@ import { configureApp } from '@/app.setup';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { Category } from '@/modules/categories/entities/category.entity';
+import { CustomerTaxProfile } from '@/modules/customers/entities/customer-tax-profile.entity';
 import { Customer } from '@/modules/customers/entities/customer.entity';
 import { RestaurantCustomer } from '@/modules/customers/entities/restaurant-customer.entity';
 import { WalletMovement } from '@/modules/customers/entities/wallet-movement.entity';
@@ -19,6 +21,7 @@ import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
 import { NotificationType } from '@/modules/notifications/enums/notification-type.enum';
+import { Invoice } from '@/modules/orders/entities/invoice.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { Payment } from '@/modules/orders/entities/payment.entity';
 import { Product } from '@/modules/products/entities/product.entity';
@@ -2089,6 +2092,335 @@ describe('BotBite API (e2e)', () => {
           expect((await activeOrders()).some((o) => o.code === code)).toBe(
             false,
           );
+        });
+      });
+
+      describe('invoices', () => {
+        let invoiceCounter = 0;
+
+        const CUSTOMER = {
+          rfc: 'XAXX010101000',
+          legalName: 'JUAN PEREZ LOPEZ',
+          zip: '83000',
+          taxRegime: '612',
+        };
+        const invoiceBody = (orderCode: string, extra: object = {}) => {
+          const n = ++invoiceCounter;
+          return {
+            orderCode,
+            providerInvoiceId: `FAPI${String(n).padStart(8, '0')}`,
+            uuid: randomUUID().toUpperCase(),
+            folio: String(100 + n),
+            total: 50,
+            paymentForm: '04',
+            cfdiUse: 'G03',
+            emailSent: true,
+            customer: CUSTOMER,
+            ...extra,
+          };
+        };
+        const invoice = (body: object, key = secret) =>
+          http()
+            .post('/v1/bot/invoices')
+            .set({ 'X-BotBite-Key': key })
+            .send(body);
+        const lookupTax = async (phone: string, key = secret) => {
+          const res = await http()
+            .post('/v1/bot/customers/lookup')
+            .set({ 'X-BotBite-Key': key })
+            .send({ phone, includeTaxProfile: true })
+            .expect(200);
+          return res.body as {
+            known: boolean;
+            hasTaxProfile: boolean;
+            taxProfile: Record<string, unknown> | null;
+          };
+        };
+        const servedAccount = async (phone: string) => {
+          const code = await openFor(phone);
+          await askBill(code).expect(200);
+          await setStatus(code, 'with_waiter').expect(200);
+          return code;
+        };
+        const invoicesOf = async (code: string) =>
+          dataSource
+            .getRepository(Invoice)
+            .findBy({ orderId: (await orderOf(code)).id });
+
+        it('records the invoice, tells the cashier and ignores retries', async () => {
+          const code = await servedAccount(nextPhone());
+          const uuid = randomUUID();
+          const body = invoiceBody(code, {
+            uuid,
+            customer: { ...CUSTOMER, rfc: ' xaxx-010101000 ' },
+          });
+
+          const first = await invoice(body).expect(201);
+          expect(first.body).toMatchObject({
+            created: true,
+            repeated: false,
+            hasTaxProfile: false,
+            invoice: {
+              folio: body.folio,
+              total: 50,
+              orderCode: code,
+              uuid: uuid.toUpperCase(),
+            },
+          });
+
+          const retry = await invoice(body).expect(200);
+          expect(retry.body.created).toBe(false);
+          expect(retry.body.invoice.id).toBe(first.body.invoice.id);
+
+          const saved = await invoicesOf(code);
+          expect(saved).toHaveLength(1);
+          expect(saved[0]).toMatchObject({
+            rfc: 'XAXX010101000',
+            legalName: 'JUAN PEREZ LOPEZ',
+            paymentForm: '04',
+            cfdiUse: 'G03',
+            emailSent: true,
+          });
+
+          const notices = (await notificationsOf(saved[0].orderId)).filter(
+            (n) => n.type === NotificationType.INVOICE,
+          );
+          expect(notices).toHaveLength(1);
+          expect(notices[0].message).toContain(`factura ${body.folio}`);
+          expect(notices[0].message).not.toContain('XAXX');
+        });
+
+        it('survives the same invoice arriving at the same time', async () => {
+          const code = await servedAccount(nextPhone());
+          const body = invoiceBody(code);
+
+          const responses = await Promise.all(
+            Array.from({ length: 5 }, () => invoice(body)),
+          );
+
+          expect(responses.filter((r) => r.status === 201)).toHaveLength(1);
+          expect(responses.filter((r) => r.status === 200)).toHaveLength(4);
+          expect(await invoicesOf(code)).toHaveLength(1);
+        });
+
+        it('saves the tax data only when the customer accepts', async () => {
+          const phone = nextPhone();
+
+          const without = await invoice(
+            invoiceBody(await servedAccount(phone)),
+          ).expect(201);
+          expect(without.body.hasTaxProfile).toBe(false);
+          expect(await lookupTax(phone)).toMatchObject({
+            known: true,
+            hasTaxProfile: false,
+            taxProfile: null,
+          });
+
+          const saved = await invoice(
+            invoiceBody(await servedAccount(phone), {
+              saveTaxProfile: {
+                email: 'juan@example.com',
+                taxRegimes: ['626'],
+              },
+            }),
+          ).expect(201);
+          expect(saved.body.hasTaxProfile).toBe(true);
+
+          expect((await lookupTax(phone)).taxProfile).toMatchObject({
+            ...CUSTOMER,
+            taxRegimes: ['626', '612'],
+            cfdiUse: 'G03',
+            email: 'juan@example.com',
+          });
+
+          const plain = await http()
+            .post('/v1/bot/customers/lookup')
+            .set(bot())
+            .send({ phone })
+            .expect(200);
+          expect(plain.body.hasTaxProfile).toBe(true);
+          expect(plain.body).not.toHaveProperty('taxProfile');
+        });
+
+        it('replaces the saved tax data with the newest', async () => {
+          const phone = nextPhone();
+          const consent = { saveTaxProfile: { email: 'ana@example.com' } };
+
+          await invoice(
+            invoiceBody(await servedAccount(phone), consent),
+          ).expect(201);
+          await invoice(
+            invoiceBody(await servedAccount(phone), {
+              ...consent,
+              cfdiUse: 'S01',
+              customer: { ...CUSTOMER, taxRegime: '626' },
+            }),
+          ).expect(201);
+
+          expect((await lookupTax(phone)).taxProfile).toMatchObject({
+            taxRegime: '626',
+            taxRegimes: ['626'],
+            cfdiUse: 'S01',
+          });
+        });
+
+        it('keeps the tax data apart between restaurants', async () => {
+          const phone = nextPhone();
+          await invoice(
+            invoiceBody(await servedAccount(phone), {
+              saveTaxProfile: { email: 'ana@example.com' },
+            }),
+          ).expect(201);
+
+          await expect(lookupTax(phone, otherSecret)).resolves.toMatchObject({
+            known: false,
+            hasTaxProfile: false,
+            taxProfile: null,
+          });
+        });
+
+        it('deletes the tax data for real when asked', async () => {
+          const phone = nextPhone();
+          await invoice(
+            invoiceBody(await servedAccount(phone), {
+              saveTaxProfile: { email: 'ana@example.com' },
+            }),
+          ).expect(201);
+
+          const res = await http()
+            .patch('/v1/bot/customers')
+            .set(bot())
+            .send({ phone, deleteTaxProfile: true })
+            .expect(200);
+          expect(res.body.hasTaxProfile).toBe(false);
+          expect((await lookupTax(phone)).taxProfile).toBeNull();
+
+          const customer = await dataSource
+            .getRepository(Customer)
+            .findOneByOrFail({ phone: `+${phone}` });
+          const membership = await dataSource
+            .getRepository(RestaurantCustomer)
+            .findOneByOrFail({
+              customerId: customer.id,
+              restaurantId: seed.restaurantA.id,
+            });
+          await expect(
+            dataSource.getRepository(CustomerTaxProfile).count({
+              where: { restaurantCustomerId: membership.id },
+              withDeleted: true,
+            }),
+          ).resolves.toBe(0);
+        });
+
+        it('warns when an account gets a second invoice', async () => {
+          const code = await servedAccount(nextPhone());
+          const first = invoiceBody(code);
+          await invoice(first).expect(201);
+
+          const second = await invoice(invoiceBody(code)).expect(201);
+          expect(second.body.repeated).toBe(true);
+
+          const saved = await invoicesOf(code);
+          expect(saved).toHaveLength(2);
+          const alerts = (await notificationsOf(saved[0].orderId)).filter(
+            (n) => n.type === NotificationType.ALERT,
+          );
+          expect(alerts[alerts.length - 1].message).toContain(
+            `ya tenía la factura ${first.folio}`,
+          );
+        });
+
+        it('rejects the same invoice for another account', async () => {
+          const body = invoiceBody(await servedAccount(nextPhone()));
+          await invoice(body).expect(201);
+
+          await invoice({
+            ...body,
+            orderCode: await servedAccount(nextPhone()),
+          }).expect(409);
+        });
+
+        it('does not touch an account of another branch', async () => {
+          const code = await servedAccount(nextPhone());
+
+          await invoice(invoiceBody(code), otherSecret).expect(404);
+          await invoice(invoiceBody('CNOEXISTE')).expect(404);
+          expect(await invoicesOf(code)).toHaveLength(0);
+        });
+
+        it('validates the fiscal data', async () => {
+          const code = await servedAccount(nextPhone());
+          const wrong = [
+            { customer: { ...CUSTOMER, rfc: 'XAXX0101' } },
+            { customer: { ...CUSTOMER, zip: '8300' } },
+            { customer: { ...CUSTOMER, email: 'juan@example.com' } },
+            { uuid: 'no-es-un-uuid' },
+            { paymentForm: '4' },
+            { cfdiUse: 'GASTOS' },
+            { total: -1 },
+            { saveTaxProfile: {} },
+            { saveTaxProfile: { email: 'no-es-correo' } },
+          ];
+
+          for (const extra of wrong) {
+            await invoice(invoiceBody(code, extra)).expect(400);
+          }
+          expect(await invoicesOf(code)).toHaveLength(0);
+        });
+
+        it('the panel sees the payments and invoices of the day', async () => {
+          const code = await openFor(nextPhone());
+          await askBill(code).expect(200);
+          await sendLink(code);
+          const operation = paymentId();
+          await pay(operation, 50, code).expect(201);
+          const body = invoiceBody(code);
+          await invoice(body).expect(201);
+
+          const url = `/v1/orders/billing?branchId=${seed.branchA.id}`;
+          const res = await http().get(url).set(auth(ownerToken)).expect(200);
+          const day = res.body as {
+            date: string;
+            payments: { providerPaymentId: string }[];
+            invoices: { folio: string }[];
+          };
+
+          expect(day.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+          expect(
+            day.payments.find((p) => p.providerPaymentId === operation),
+          ).toMatchObject({
+            orderCode: code,
+            table: 'A5',
+            status: 'approved',
+            paidAmount: 50,
+          });
+          const issued = day.invoices.find((i) => i.folio === body.folio);
+          expect(issued).toMatchObject({
+            orderCode: code,
+            table: 'A5',
+            rfc: 'XAXX010101000',
+            total: 50,
+            emailSent: true,
+          });
+          expect(issued).not.toHaveProperty('email');
+
+          await expect(
+            http()
+              .get(`${url}&date=2020-01-01`)
+              .set(auth(ownerToken))
+              .expect(200)
+              .then((r) => r.body as unknown),
+          ).resolves.toEqual({
+            date: '2020-01-01',
+            payments: [],
+            invoices: [],
+          });
+
+          await http()
+            .get(`${url}&date=2026-02-30`)
+            .set(auth(ownerToken))
+            .expect(400);
+          await http().get(url).set(auth(otherToken)).expect(403);
         });
       });
 
