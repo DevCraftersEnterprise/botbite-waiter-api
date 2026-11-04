@@ -35,7 +35,7 @@ export class EnvironmentVariables {
   @IsUrl({ require_tld: false, protocols: ['http', 'https'] })
   QR_BASE_URL?: string;
 
-  // Firma de los avisos a n8n. Sin él no se envían.
+  // Firma de los avisos al servicio del mesero. Sin él no se envían.
   @IsOptional()
   @IsString()
   @MinLength(32)

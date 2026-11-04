@@ -51,7 +51,7 @@ export default () => {
       loginLimit: parseInt(process.env.THROTTLE_LOGIN_LIMIT ?? '5', 10),
     },
     bot: {
-      // Firma los avisos a n8n. Sin él no se envían.
+      // Firma los avisos al servicio del mesero. Sin él no se envían.
       webhookSecret: process.env.BOT_WEBHOOK_SECRET,
     },
     docs: {

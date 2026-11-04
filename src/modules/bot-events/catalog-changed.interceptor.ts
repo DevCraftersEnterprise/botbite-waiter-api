@@ -27,7 +27,7 @@ const scopeOf = (request: Request): CatalogScope => {
   };
 };
 
-/** Avisa a n8n cuando una ruta del panel cambia el catálogo. */
+/** Avisa al servicio del mesero cuando una ruta del panel cambia el catálogo. */
 @Injectable()
 export class CatalogChangedInterceptor implements NestInterceptor {
   constructor(private readonly botEventsService: BotEventsService) {}

@@ -64,7 +64,7 @@ const toRoundResponse = ({ created, order, round }: RoundResult) => ({
 });
 
 /**
- * Rutas que consume el mesero de n8n. Todas las peticiones salen de la misma IP
+ * Rutas que consume el servicio del mesero. Todas las peticiones salen de la misma IP
  * (el VPS), así que llevan un límite propio más alto que el del panel.
  */
 @ApiTags('Bot')

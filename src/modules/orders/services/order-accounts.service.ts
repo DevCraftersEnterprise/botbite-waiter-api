@@ -49,7 +49,7 @@ export interface RoundItemInput {
 
 export interface OpenAccountInput {
   branchId: string;
-  /** Lo genera n8n; las cuentas del personal lo reciben aquí. */
+  /** Lo genera el mesero; las cuentas del personal lo reciben aquí. */
   code?: string;
   source: OrderSource;
   table: string;
@@ -105,7 +105,7 @@ export const ROUND_TRANSITIONS: Record<RoundStatus, RoundStatus[]> = {
   [RoundStatus.CANCELLED]: [],
 };
 
-/** Código de las cuentas que abre el personal. Las de n8n empiezan con C. */
+/** Código de las cuentas que abre el personal. Las del mesero empiezan con C. */
 const generateStaffCode = (): string =>
   `S${randomBytes(5).toString('hex').toUpperCase()}`;
 
@@ -388,7 +388,7 @@ export class OrderAccountsService {
   }
 
   /**
-   * Cierre diario: n8n borra esa noche las sesiones, así que nadie pedirá esas
+   * Cierre diario: el mesero borra esa noche las sesiones, así que nadie pedirá esas
    * cuentas. Solo las de WhatsApp sin cuenta pedida: las que ya tienen un cobro en
    * curso y las del personal las cierra caja.
    */

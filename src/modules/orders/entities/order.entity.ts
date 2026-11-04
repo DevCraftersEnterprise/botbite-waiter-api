@@ -22,7 +22,7 @@ import {
 @Index('IDX_orders_branch_status', ['branchId', 'status'])
 @Index('IDX_orders_branch_opened', ['branchId', 'openedAt'])
 export class Order extends BaseEntity {
-  /** Identificador de la cuenta que comparten n8n y la API. */
+  /** Identificador de la cuenta que comparten el mesero y la API. */
   @Index('UQ_orders_code', { unique: true })
   @Column({ type: 'varchar', length: 20, nullable: true })
   code: string | null;

@@ -16,7 +16,7 @@ export class Restaurant extends BaseEntity {
   @Column()
   name: string;
 
-  /** Identificador legible que usa n8n; el monedero se comparte por restaurante. */
+  /** Identificador legible que usa el mesero; el monedero se comparte por restaurante. */
   @Index('UQ_restaurants_slug', { unique: true })
   @Column({ type: 'varchar', length: 60 })
   slug: string;
