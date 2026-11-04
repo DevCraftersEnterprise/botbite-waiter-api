@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { CommonModule } from '@/common/common.module';
 import { CustomersModule } from '@/modules/customers/customers.module';
 import { NotificationsModule } from '@/modules/notifications/notifications.module';
+import { Invoice } from '@/modules/orders/entities/invoice.entity';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
@@ -10,13 +11,19 @@ import { Payment } from '@/modules/orders/entities/payment.entity';
 import { OrdersController } from '@/modules/orders/orders.controller';
 import { OrdersService } from '@/modules/orders/orders.service';
 import { OrderAccountsService } from '@/modules/orders/services/order-accounts.service';
+import { OrderInvoicesService } from '@/modules/orders/services/order-invoices.service';
 import { OrderPaymentsService } from '@/modules/orders/services/order-payments.service';
 
 @Module({
   controllers: [OrdersController],
-  providers: [OrdersService, OrderAccountsService, OrderPaymentsService],
+  providers: [
+    OrdersService,
+    OrderAccountsService,
+    OrderPaymentsService,
+    OrderInvoicesService,
+  ],
   imports: [
-    TypeOrmModule.forFeature([Order, OrderItem, OrderRound, Payment]),
+    TypeOrmModule.forFeature([Order, OrderItem, OrderRound, Payment, Invoice]),
     CommonModule,
     CustomersModule,
     NotificationsModule,
@@ -26,6 +33,7 @@ import { OrderPaymentsService } from '@/modules/orders/services/order-payments.s
     OrdersService,
     OrderAccountsService,
     OrderPaymentsService,
+    OrderInvoicesService,
   ],
 })
 export class OrdersModule {}

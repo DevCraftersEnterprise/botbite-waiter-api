@@ -1,14 +1,25 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Raw, Repository } from 'typeorm';
+import { And, In, LessThan, MoreThanOrEqual, Raw, Repository } from 'typeorm';
 import { TranslationService } from '@/common/services/translation.service';
+import { Invoice } from '@/modules/orders/entities/invoice.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
+import { Payment } from '@/modules/orders/entities/payment.entity';
 import {
   ACTIVE_ORDER_STATUSES,
   OrderStatus,
 } from '@/modules/orders/enums/order.enums';
 import { findAllOrdersUseCase } from '@/modules/orders/use-cases/orders/find-all-orders.use-case';
 import { findOneOrderUseCase } from '@/modules/orders/use-cases/orders/find-one-order.use-case';
+import {
+  InvoiceView,
+  PaymentView,
+  toInvoiceView,
+  toPaymentView,
+} from '@/modules/orders/utils/billing-view.util';
+
+/** Tope por día y sucursal: muy por encima de lo que cobra un restaurante. */
+const BILLING_LIMIT = 500;
 
 export interface OrdersSummary {
   accounts: number;
@@ -20,6 +31,13 @@ export interface OrdersSummary {
   paidWithWaiter: number;
 }
 
+export interface BillingDay {
+  /** YYYY-MM-DD en la zona horaria de la sucursal. */
+  date: string;
+  payments: PaymentView[];
+  invoices: InvoiceView[];
+}
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -27,6 +45,10 @@ export class OrdersService {
   constructor(
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
+    @InjectRepository(Payment)
+    private readonly paymentRepository: Repository<Payment>,
+    @InjectRepository(Invoice)
+    private readonly invoiceRepository: Repository<Invoice>,
     private readonly translationService: TranslationService,
   ) {}
 
@@ -111,6 +133,49 @@ export class OrdersService {
           : 0,
       paidOnline: row.paidOnline,
       paidWithWaiter: row.paidWithWaiter,
+    };
+  }
+
+  /** Pagos en línea y facturas de un día de la sucursal; sin fecha, los de hoy. */
+  async billing(branchId: string, date?: string): Promise<BillingDay> {
+    // Los límites del día se calculan en la zona de la sucursal para usar el índice.
+    const [day] = await this.orderRepository.query<
+      { date: string; from: Date; to: Date }[]
+    >(
+      `
+      SELECT to_char(d."day", 'YYYY-MM-DD') AS "date",
+             d."day"::timestamp AT TIME ZONE b."timezone" AS "from",
+             (d."day" + 1)::timestamp AT TIME ZONE b."timezone" AS "to"
+      FROM "branches" AS b
+      CROSS JOIN LATERAL (
+        SELECT COALESCE($2::date, (now() AT TIME ZONE b."timezone")::date) AS "day"
+      ) AS d
+      WHERE b."id" = $1
+      `,
+      [branchId, date ?? null],
+    );
+    if (!day) throw new NotFoundException('Branch not found');
+
+    const range = And(MoreThanOrEqual(day.from), LessThan(day.to));
+    const [payments, invoices] = await Promise.all([
+      this.paymentRepository.find({
+        where: { branchId, paidAt: range },
+        relations: { order: true },
+        order: { paidAt: 'DESC' },
+        take: BILLING_LIMIT,
+      }),
+      this.invoiceRepository.find({
+        where: { branchId, issuedAt: range },
+        relations: { order: true },
+        order: { issuedAt: 'DESC' },
+        take: BILLING_LIMIT,
+      }),
+    ]);
+
+    return {
+      date: day.date,
+      payments: payments.map(toPaymentView),
+      invoices: invoices.map(toInvoiceView),
     };
   }
 

@@ -27,6 +27,7 @@ import { BotBranchId } from '@/modules/bot/decorators/bot-branch-id.decorator';
 import { AddBotRoundDto } from '@/modules/bot/dto/add-bot-round.dto';
 import { BotBranchResponse } from '@/modules/bot/dto/bot-branch.response';
 import { BotCustomerResponse } from '@/modules/bot/dto/bot-customer.response';
+import { BotInvoiceResponse } from '@/modules/bot/dto/bot-invoice.response';
 import {
   BotOrderResponse,
   BotRoundResponse,
@@ -36,8 +37,9 @@ import {
   BotPaymentResponse,
 } from '@/modules/bot/dto/bot-payment.response';
 import { CreateBotNotificationDto } from '@/modules/bot/dto/create-bot-notification.dto';
-import { FindBotCustomerDto } from '@/modules/bot/dto/find-bot-customer.dto';
+import { LookupBotCustomerDto } from '@/modules/bot/dto/lookup-bot-customer.dto';
 import { OpenBotOrderDto } from '@/modules/bot/dto/open-bot-order.dto';
+import { RecordBotInvoiceDto } from '@/modules/bot/dto/record-bot-invoice.dto';
 import { RecordBotPaymentDto } from '@/modules/bot/dto/record-bot-payment.dto';
 import { UpdateBotCustomerDto } from '@/modules/bot/dto/update-bot-customer.dto';
 import { UpdateBotOrderDto } from '@/modules/bot/dto/update-bot-order.dto';
@@ -52,6 +54,7 @@ import {
   OrderAccountsService,
   RoundResult,
 } from '@/modules/orders/services/order-accounts.service';
+import { OrderInvoicesService } from '@/modules/orders/services/order-invoices.service';
 import { OrderPaymentsService } from '@/modules/orders/services/order-payments.service';
 import {
   toOrderView,
@@ -79,6 +82,7 @@ export class BotController {
     private readonly botConfigService: BotConfigService,
     private readonly accounts: OrderAccountsService,
     private readonly payments: OrderPaymentsService,
+    private readonly invoices: OrderInvoicesService,
     private readonly customers: RestaurantCustomersService,
     private readonly notificationsService: NotificationsService,
     @InjectRepository(Order)
@@ -196,6 +200,40 @@ export class BotController {
     };
   }
 
+  @Post('invoices')
+  @ApiOperation({
+    summary: 'Registra una factura que FacturAPI ya timbró',
+    description:
+      'Reenviar el mismo `providerInvoiceId` no la registra dos veces: responde 200 con `created: false`. La API avisa a caja. Con `saveTaxProfile` guarda los datos fiscales del comensal, que solo se escriben junto con una factura timbrada. Una factura con error no se manda aquí: avisa a caja con POST /bot/notifications.',
+  })
+  @ApiCreatedResponse({ type: BotInvoiceResponse })
+  @ApiOkResponse({ type: BotInvoiceResponse, description: 'Era un reintento' })
+  async recordInvoice(
+    @BotBranchId() branchId: string,
+    @Body() dto: RecordBotInvoiceDto,
+    @Res({ passthrough: true }) response: Response,
+  ) {
+    const { created, invoice, order, previous, hasTaxProfile } =
+      await this.invoices.record(branchId, dto);
+
+    response.status(created ? HttpStatus.CREATED : HttpStatus.OK);
+
+    return {
+      created,
+      repeated: Boolean(previous),
+      hasTaxProfile,
+      invoice: {
+        id: invoice.id,
+        providerInvoiceId: invoice.providerInvoiceId,
+        uuid: invoice.uuid,
+        folio: invoice.folio,
+        total: Number(invoice.total),
+        issuedAt: invoice.issuedAt,
+        orderCode: order.code,
+      },
+    };
+  }
+
   @Post('daily-close')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -216,21 +254,25 @@ export class BotController {
   @ApiOperation({
     summary: 'Visitas, promociones y saldo del comensal en este restaurante',
     description:
-      'Si nunca ha venido responde 200 con `known: false` y el saldo en cero.',
+      'Si nunca ha venido responde 200 con `known: false` y el saldo en cero. Los datos fiscales solo vienen con `includeTaxProfile: true`.',
   })
   @ApiOkResponse({ type: BotCustomerResponse })
   findCustomer(
     @BotBranchId() branchId: string,
-    @Body() dto: FindBotCustomerDto,
+    @Body() dto: LookupBotCustomerDto,
   ) {
-    return this.customers.findProfile(branchId, dto.phone);
+    return this.customers.findProfile(
+      branchId,
+      dto.phone,
+      dto.includeTaxProfile,
+    );
   }
 
   @Patch('customers')
   @ApiOperation({
     summary: 'Guarda el nombre y la respuesta a promociones del comensal',
     description:
-      'Con `unsubscribed: true` queda dado de baja de las promociones. Si no existe, lo crea.',
+      'Con `unsubscribed: true` queda dado de baja de las promociones y con `deleteTaxProfile: true` se borran sus datos fiscales. Si no existe, lo crea.',
   })
   @ApiOkResponse({ type: BotCustomerResponse })
   updateCustomer(

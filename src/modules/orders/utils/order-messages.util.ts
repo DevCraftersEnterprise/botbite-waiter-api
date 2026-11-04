@@ -1,3 +1,4 @@
+import { Invoice } from '@/modules/orders/entities/invoice.entity';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { Payment } from '@/modules/orders/entities/payment.entity';
@@ -82,6 +83,16 @@ export const closedAccountPaymentMessage = (
 
 export const unmatchedPaymentMessage = (payment: Payment): string =>
   `⚠️ Llegó un pago de ${money(payment.paidAmount)} sin cuenta asociada. Revísalo en Mercado Pago (operación ${payment.providerPaymentId}).`;
+
+export const invoiceMessage = (order: Order, invoice: Invoice): string =>
+  `🧾 Se emitió la factura ${invoice.folio} de ${who(order)} por ${money(invoice.total)}.`;
+
+export const repeatedInvoiceMessage = (
+  order: Order,
+  invoice: Invoice,
+  previous: Invoice,
+): string =>
+  `⚠️ Se emitió la factura ${invoice.folio} de ${who(order)}, pero esa cuenta ya tenía la factura ${previous.folio}. Revisa en FacturAPI si hay que cancelar una.`;
 
 export const dailyCloseMessage = (orders: Order[]): string => {
   const accounts = orders.map(

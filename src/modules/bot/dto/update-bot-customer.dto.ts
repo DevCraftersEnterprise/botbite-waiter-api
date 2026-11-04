@@ -30,4 +30,11 @@ export class UpdateBotCustomerDto extends FindBotCustomerDto {
   @IsOptional()
   @IsBoolean()
   unsubscribed?: boolean;
+
+  @ApiPropertyOptional({
+    description: 'Pidió que se borren sus datos fiscales guardados',
+  })
+  @IsOptional()
+  @IsBoolean()
+  deleteTaxProfile?: boolean;
 }
