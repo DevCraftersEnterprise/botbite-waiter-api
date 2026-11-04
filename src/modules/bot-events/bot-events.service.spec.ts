@@ -1,5 +1,8 @@
 import { createHmac } from 'crypto';
-import { signBotEvent } from '@/modules/bot-events/bot-events.service';
+import {
+  botEventsUrl,
+  signBotEvent,
+} from '@/modules/bot-events/bot-events.service';
 
 describe('signBotEvent', () => {
   it('signs the timestamp and the body, so neither can be altered', () => {
@@ -16,6 +19,26 @@ describe('signBotEvent', () => {
   it('changes with the timestamp', () => {
     expect(signBotEvent('secret', '1', '{}')).not.toBe(
       signBotEvent('secret', '2', '{}'),
+    );
+  });
+});
+
+describe('botEventsUrl', () => {
+  it('appends the events path to the base', () => {
+    expect(botEventsUrl('https://n8n.test/webhook/mesero-cocorit')).toBe(
+      'https://n8n.test/webhook/mesero-cocorit/portal-evento',
+    );
+    expect(botEventsUrl('https://mesero.test/')).toBe(
+      'https://mesero.test/portal-evento',
+    );
+  });
+
+  it('keeps the query that picks the business', () => {
+    expect(botEventsUrl('https://mesero.test/?negocio=punto-de-union')).toBe(
+      'https://mesero.test/portal-evento?negocio=punto-de-union',
+    );
+    expect(botEventsUrl('https://mesero.test/api?negocio=a&sucursal=b')).toBe(
+      'https://mesero.test/api/portal-evento?negocio=a&sucursal=b',
     );
   });
 });
