@@ -3,6 +3,7 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { botKeyOf, botKeyTracker } from '@/modules/bot/utils/bot-throttle.util';
 import { plainToInstance } from 'class-transformer';
 import { validateSync } from 'class-validator';
 import { CommonModule } from '@/common/common.module';
@@ -53,6 +54,16 @@ import { UsersModule } from '@/modules/users/users.module';
           name: 'default',
           ttl: configService.get<number>('throttle.ttlMs', 60_000),
           limit: configService.get<number>('throttle.limit', 100),
+        },
+        {
+          // Las rutas del bot cuentan por llave: el servicio del mesero atiende
+          // a todos los negocios desde la misma IP y compartirían el límite.
+          name: 'bot',
+          ttl: configService.get<number>('throttle.ttlMs', 60_000),
+          limit: configService.get<number>('throttle.botLimit', 1000),
+          skipIf: (context) =>
+            !botKeyOf(context.switchToHttp().getRequest<object>()),
+          getTracker: (request) => botKeyTracker(botKeyOf(request) ?? ''),
         },
       ],
     }),

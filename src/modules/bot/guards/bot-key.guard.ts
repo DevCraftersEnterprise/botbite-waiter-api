@@ -6,8 +6,9 @@ import {
 } from '@nestjs/common';
 import { Request } from 'express';
 import { BotKeysService } from '@/modules/bot/services/bot-keys.service';
+import { BOT_KEY_HEADER } from '@/modules/bot/utils/bot-throttle.util';
 
-export const BOT_KEY_HEADER = 'x-botbite-key';
+export { BOT_KEY_HEADER };
 
 export interface BotRequest extends Request {
   botBranchId: string;
