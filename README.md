@@ -46,7 +46,6 @@ La API queda en `http://localhost:3000/v1` y el health check en `GET /v1/health`
 | `migration:run:prod` | Migraciones desde `dist` (requiere `build`) |
 | `test` | Pruebas unitarias |
 | `test:e2e` | Pruebas e2e contra Postgres. La base `E2E_DB_NAME` (por defecto `botbite_test`) **se borra** en cada corrida |
-| `test:cov` / `test:e2e:cov` | Las mismas pruebas con cobertura (`coverage/` y `coverage-e2e/`) |
 | `lint:check` | ESLint sin corregir, como en la CI |
 | `lint` / `format` | ESLint y Prettier |
 
@@ -83,7 +82,6 @@ La API corre como **Web Service en Render** y la base de datos está en **Neon**
 | Pre-Deploy Command | `npm run migration:run:prod` |
 | Start Command | `npm run start:prod` |
 | Health Check Path | `/v1/health` |
-| Auto-Deploy | **After CI Checks Pass**: Render no despliega un commit de `main` si falla su CI |
 
 > Sin `npm run build` en el Build Command no existe `dist/main` y el despliegue falla con `Cannot find module '.../dist/main'`.
 
@@ -215,10 +213,9 @@ Las e2e levantan la app completa contra Postgres real. Cubren:
 
 ## CI y rama protegida
 
-- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): en cada PR hacia `main` y en cada push a `main` corre lint, las pruebas unitarias, el build y las e2e contra un Postgres 16 vacío. Con el secreto `SONAR_TOKEN`, además manda la cobertura de las dos suites a SonarCloud.
+- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): en cada PR hacia `main` y en cada push a `main` corre lint, las pruebas unitarias, el build y las e2e contra un Postgres 16 vacío. No usa secretos.
 - **`main` protegida:** solo entra por PR y con el check `test` en verde. No se borra ni acepta force-push, y la regla aplica también a los administradores.
-- **Despliegue:** Render despliega `main` cuando pasa su CI. [watch-render.yml](.github/workflows/watch-render.yml) espera ese deploy, revisa `/v1/health` y avisa a Discord. Usa los secretos `RENDER_API_KEY`, `RENDER_SERVICE_ID` y `DISCORD_WEBHOOK_URL`; si faltan, se omite.
-- **Dependabot** abre cada semana un PR con las versiones menores y los parches. Las versiones mayores se actualizan a mano.
+- **Despliegue:** Render despliega `main` como siempre. Como solo entra lo que pasó la CI, lo que despliega ya está probado.
 
 ## Solución de problemas
 

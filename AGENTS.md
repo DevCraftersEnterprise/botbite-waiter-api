@@ -116,4 +116,3 @@ Después de desplegar, revisa los logs del deploy y corre `curl https://api.botb
 - `main` solo acepta PRs con el check `test` en verde: lint, unitarias, build y e2e contra Postgres 16. No hay excepción para administradores, así que no hay atajo para un hotfix: también va por PR.
 - Antes de abrir el PR corre lo mismo que la CI: `npm run lint:check`, `npm test`, `npm run build` y `npm run test:e2e` contra un Postgres local.
 - Si la CI falla, se corrige en la rama; no se fuerza el merge.
-- Render despliega `main` solo cuando pasa su CI, y `watch-render.yml` confirma el deploy y la salud de la API.
