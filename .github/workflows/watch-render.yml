@@ -1,0 +1,142 @@
+name: Watch Render deploy
+
+# Render despliega main por su cuenta. Este workflow espera el deploy del commit,
+# revisa /v1/health y avisa a Discord. Sin RENDER_API_KEY y RENDER_SERVICE_ID se
+# omite; sin DISCORD_WEBHOOK_URL no avisa.
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: watch-render-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  watch-render-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Check Render secrets
+        id: render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+        run: |
+          if [ -n "$RENDER_API_KEY" ] && [ -n "$RENDER_SERVICE_ID" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Vigilancia de Render omitida: faltan RENDER_API_KEY o RENDER_SERVICE_ID."
+          fi
+
+      - name: Wait for the Render deploy and check health
+        if: steps.render.outputs.enabled == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
+          COMMIT_SHA: ${{ github.sha }}
+          HEALTH_URL: https://api.botbite.com.mx/v1/health
+        run: |
+          set -euo pipefail
+          api() {
+            curl -sS --fail-with-body -H "Authorization: Bearer $RENDER_API_KEY" \
+              "https://api.render.com/v1/services/$RENDER_SERVICE_ID/$1"
+          }
+
+          # Con "Auto-Deploy: After CI Checks Pass", Render empieza cuando termina la CI de main.
+          DEPLOY_ID=""
+          for i in $(seq 1 80); do
+            DEPLOY_ID=$(api "deploys?limit=20" | jq -r --arg sha "$COMMIT_SHA" \
+              'map(select(.deploy.commit.id? == $sha)) | first | .deploy.id // empty')
+            [ -n "$DEPLOY_ID" ] && break
+            echo "Render aún no registra el deploy de $COMMIT_SHA. Reintento en 15 s..."
+            sleep 15
+          done
+          if [ -z "$DEPLOY_ID" ]; then
+            echo "No apareció un deploy de Render para este commit."
+            exit 1
+          fi
+
+          echo "Vigilando el deploy $DEPLOY_ID..."
+          for i in $(seq 1 80); do
+            STATUS=$(api "deploys/$DEPLOY_ID" | jq -r '.status // .deploy.status // empty')
+            echo "DEPLOY_STATUS=$STATUS" >> "$GITHUB_ENV"
+            echo "Estado: $STATUS"
+            case "$STATUS" in
+              live) break ;;
+              deactivated)
+                echo "::notice::Un deploy más nuevo reemplazó a este."
+                exit 0
+                ;;
+              build_failed|update_failed|pre_deploy_failed|canceled)
+                echo "El deploy terminó con estado $STATUS."
+                exit 1
+                ;;
+            esac
+            sleep 15
+          done
+          if [ "$STATUS" != "live" ]; then
+            echo "Se acabó el tiempo esperando el deploy."
+            exit 1
+          fi
+
+          for i in $(seq 1 10); do
+            if curl -sS --fail --max-time 10 "$HEALTH_URL" > /dev/null; then
+              echo "La API responde en $HEALTH_URL."
+              exit 0
+            fi
+            sleep 6
+          done
+          echo "El deploy quedó live, pero $HEALTH_URL no responde."
+          echo "DEPLOY_STATUS=unhealthy" >> "$GITHUB_ENV"
+          exit 1
+
+      - name: Notify Discord
+        if: always() && steps.render.outputs.enabled == 'true'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          JOB_STATUS: ${{ job.status }}
+          DEPLOY_STATUS: ${{ env.DEPLOY_STATUS }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "::notice::Sin DISCORD_WEBHOOK_URL: no se avisa."
+            exit 0
+          fi
+          if [ "$JOB_STATUS" = "success" ]; then
+            TITLE="🚀 Deploy exitoso en Render"; COLOR=3066993
+          else
+            TITLE="💥 Deploy fallido en Render"; COLOR=15158332
+          fi
+          jq -n \
+            --arg title "$TITLE" \
+            --argjson color "$COLOR" \
+            --arg status "${DEPLOY_STATUS:-desconocido}" \
+            --arg actor "$ACTOR" \
+            --arg commit "$(echo "$COMMIT_SHA" | cut -c1-7) — $(echo "${COMMIT_MESSAGE:-Sin mensaje}" | head -n 1)" \
+            --arg run_url "$RUN_URL" \
+            '{
+              username: "DevCrafters CI",
+              embeds: [{
+                title: $title,
+                color: $color,
+                fields: [
+                  { name: "Estado", value: $status, inline: true },
+                  { name: "Autor", value: $actor, inline: true },
+                  { name: "Commit", value: $commit, inline: false },
+                  { name: "Ejecución", value: ("[Abrir workflow](" + $run_url + ")"), inline: false }
+                ],
+                footer: { text: "BotBite API · Producción" },
+                timestamp: (now | todateiso8601)
+              }]
+            }' > discord.json
+          curl -sS -H "Content-Type: application/json" -X POST -d @discord.json "$DISCORD_WEBHOOK_URL"
