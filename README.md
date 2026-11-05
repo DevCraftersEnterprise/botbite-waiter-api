@@ -18,6 +18,7 @@ API de **BotBite**, el mesero virtual por WhatsApp para restaurantes. Es la fuen
 - [Roles y permisos](#roles-y-permisos)
 - [Concurrencia y escalabilidad](#concurrencia-y-escalabilidad)
 - [Pruebas](#pruebas)
+- [CI y rama protegida](#ci-y-rama-protegida)
 - [Solución de problemas](#solución-de-problemas)
 
 ## Puesta en marcha
@@ -45,6 +46,7 @@ La API queda en `http://localhost:3000/v1` y el health check en `GET /v1/health`
 | `migration:run:prod` | Migraciones desde `dist` (requiere `build`) |
 | `test` | Pruebas unitarias |
 | `test:e2e` | Pruebas e2e contra Postgres. La base `E2E_DB_NAME` (por defecto `botbite_test`) **se borra** en cada corrida |
+| `lint:check` | ESLint sin corregir, como en la CI |
 | `lint` / `format` | ESLint y Prettier |
 
 ## Variables de entorno
@@ -208,6 +210,12 @@ Las e2e levantan la app completa contra Postgres real. Cubren:
 - avisos firmados a n8n, contra un servidor local;
 - notificaciones;
 - WebSocket.
+
+## CI y rama protegida
+
+- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): en cada PR hacia `main` y en cada push a `main` corre lint, las pruebas unitarias, el build y las e2e contra un Postgres 16 vacío. No usa secretos.
+- **`main` protegida:** solo entra por PR y con el check `test` en verde. No se borra ni acepta force-push, y la regla aplica también a los administradores.
+- **Despliegue:** Render despliega `main` como siempre. Como solo entra lo que pasó la CI, lo que despliega ya está probado.
 
 ## Solución de problemas
 
