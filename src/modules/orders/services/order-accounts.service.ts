@@ -12,6 +12,7 @@ import { errorCode } from '@/common/utils/error.util';
 import { fromCents, toCents } from '@/common/utils/money.util';
 import { BotEventsService } from '@/modules/bot-events/bot-events.service';
 import { Branch } from '@/modules/branches/entities/branch.entity';
+import { acceptedTable } from '@/modules/branches/utils/table.util';
 import {
   WalletMovementType,
   WalletUse,
@@ -135,12 +136,18 @@ export class OrderAccountsService {
         const existing = await manager.findOne(Order, { where: { code } });
         if (existing) return this.replay(manager, existing, input.branchId);
 
+        const tableLabel = await this.acceptTable(
+          manager,
+          input.branchId,
+          input.table,
+        );
+
         const order = await manager.save(
           manager.create(Order, {
             code,
             branchId: input.branchId,
             source: input.source,
-            tableLabel: input.table,
+            tableLabel,
             customerName: input.customerName || null,
             language: input.language ?? 'es',
             locationVerified: input.locationVerified ?? false,
@@ -459,6 +466,27 @@ export class OrderAccountsService {
     }
 
     return order;
+  }
+
+  /** La mesa debe estar en la lista de la sucursal, si tiene una. */
+  private async acceptTable(
+    manager: EntityManager,
+    branchId: string,
+    table: string,
+  ): Promise<string> {
+    const { validTables } = await manager.findOneOrFail(Branch, {
+      where: { id: branchId },
+      select: { id: true, validTables: true },
+    });
+    const accepted = acceptedTable(table, validTables);
+
+    if (!accepted) {
+      throw new BadRequestException(
+        `Table ${table} is not accepted in this branch`,
+      );
+    }
+
+    return accepted;
   }
 
   /** Descuenta el monedero al pedir la cuenta. Devuelve si pidió de más. */

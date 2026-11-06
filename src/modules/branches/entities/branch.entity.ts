@@ -43,7 +43,10 @@ export class Branch extends BaseEntity {
   @Column()
   name: string;
 
-  /** Único en la plataforma: es parte del QR, del webhook y del prefijo de Redis. */
+  /**
+   * `<restaurante>-<sucursal>`, único en la plataforma: es parte del QR, del
+   * webhook y del prefijo de Redis.
+   */
   @Index('UQ_branches_slug', { unique: true })
   @Column({ type: 'varchar', length: 60 })
   slug: string;

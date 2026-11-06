@@ -2,11 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { TranslationService } from '@/common/services/translation.service';
-import { slugify, uniqueSlug } from '@/common/utils/slug.util';
+import { branchSlug, uniqueSlug } from '@/common/utils/slug.util';
 import { CreateBranchDto } from '@/modules/branches/dto/create-branch.dto';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { BranchResponse } from '@/modules/branches/interfaces/branches.interfaces';
 import { assertBranchChangesUtil } from '@/modules/branches/utils/assert-branch-changes.util';
+import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
 import { User } from '@/modules/users/entities/user.entity';
 
 @Injectable()
@@ -27,8 +28,13 @@ export class CreateBranchUseCase {
   ): Promise<BranchResponse> {
     await assertBranchChangesUtil(createBranchDto, this.branchRepository);
 
+    const restaurant = await this.branchRepository.manager.findOneOrFail(
+      Restaurant,
+      { where: { id: restaurantId }, select: { id: true, slug: true } },
+    );
+
     const slug = await uniqueSlug(
-      slugify(createBranchDto.name, 'sucursal'),
+      branchSlug(restaurant.slug, createBranchDto.name),
       (candidate) =>
         this.branchRepository.exists({
           where: { slug: candidate },

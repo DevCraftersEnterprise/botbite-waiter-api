@@ -97,7 +97,11 @@ describe('payment messages', () => {
   });
 
   it('skips the breakdown without a tip', () => {
-    const noTip = { ...payment, tip: '0.00', paidAmount: '210.00' } as Payment;
+    const noTip = {
+      ...payment,
+      tip: '0.00',
+      paidAmount: '210.00',
+    } as unknown as Payment;
 
     expect(paymentMessage(order, noTip)).toContain(
       'pagó con Mercado Pago: $210.00.',
@@ -105,7 +109,7 @@ describe('payment messages', () => {
   });
 
   it('warns about money that does not match', () => {
-    const short = { ...payment, paidAmount: '100.00' } as Payment;
+    const short = { ...payment, paidAmount: '100.00' } as unknown as Payment;
 
     expect(incompletePaymentMessage(order, short)).toContain(
       'pago de $100.00 de Sergio en la mesa A5, pero la cuenta era de $231.00',
