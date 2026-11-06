@@ -52,7 +52,7 @@ export class BranchFeaturesDto {
   survey?: boolean;
 }
 
-/** Lo que cambia la conexión con n8n o lo contratado: solo SUPER/ADMIN. */
+/** Lo que cambia la conexión con el servicio del mesero o lo contratado: solo SUPER/ADMIN. */
 export const ADMIN_ONLY_BOT_FIELDS = [
   'slug',
   'whatsappPhoneNumberId',
@@ -103,7 +103,7 @@ export class UpdateBotConfigDto {
   @IsBoolean()
   verifyLocation?: boolean;
 
-  // El máximo es amplio porque n8n se prueba desde otra ciudad.
+  // El máximo es amplio porque el mesero se prueba desde otra ciudad.
   @IsOptional()
   @IsInt()
   @Min(10)

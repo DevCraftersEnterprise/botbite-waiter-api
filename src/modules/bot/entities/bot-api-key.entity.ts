@@ -11,7 +11,7 @@ import {
 import { Branch } from '@/modules/branches/entities/branch.entity';
 
 /**
- * Llave de servicio con la que n8n llama a /v1/bot/*. Cada una pertenece a una
+ * Llave con la que el servicio del mesero llama a /v1/bot/*. Cada una pertenece a una
  * sucursal, y solo se guarda su hash: el valor completo se muestra una vez.
  */
 @Entity({ name: 'bot_api_keys' })

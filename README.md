@@ -3,7 +3,7 @@
 API de **BotBite**, el mesero virtual por WhatsApp para restaurantes. Es la fuente de verdad del negocio y el backend del panel web ([botbite-waiter-app](https://github.com/DevCraftersEnterprise/botbite-waiter-app)).
 
 - **Panel web:** restaurantes, sucursales, productos, menús, pedidos, personal y notificaciones de caja en tiempo real.
-- **Mesero de WhatsApp:** corre en n8n, fuera de este repo. Ver [Mesero de WhatsApp](#mesero-de-whatsapp).
+- **Mesero de WhatsApp:** un servicio en Node.js que mantiene Carlos, fuera de este repo. Ver [Mesero de WhatsApp](#mesero-de-whatsapp).
 - **Multi-restaurante y multi-sucursal:** cada cliente solo ve y administra lo suyo.
 
 **Stack:** NestJS 11 · TypeORM · PostgreSQL · Socket.IO · Cloudinary.
@@ -60,7 +60,7 @@ Se validan al arrancar ([src/config/env.validation.ts](src/config/env.validation
 | `TRUST_PROXY` | No (1) | Número de proxies delante de la API (Render = 1) |
 | `QR_BASE_URL` | No (`https://botbite.com.mx`) | Sitio que redirige `/m/<sucursal>` a la página QR del mesero |
 | `DOCS_USER`, `DOCS_PASSWORD` | No | Acceso a Swagger en `/docs`. En producción no se publica sin ellas |
-| `BOT_WEBHOOK_SECRET` | No | Firma de los avisos a n8n (mínimo 32 caracteres). Sin él no se envían |
+| `BOT_WEBHOOK_SECRET` | No | Firma de los avisos al servicio del mesero (mínimo 32 caracteres). Sin él no se envían |
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Sí | Conexión a PostgreSQL |
 | `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED`, `DB_SSL_CA` | No | SSL activo en producción y con verificación del certificado |
 | `JWT_SECRET`, `JWT_REFRESH_SECRET` | Sí | Mínimo 32 caracteres cada uno y distintos entre sí |
@@ -112,20 +112,20 @@ src/
     ├── restaurants/  branches/  products/  categories/  menus/
     ├── orders/  customers/
     ├── notifications/ # notificaciones de caja y WebSocket (Socket.IO)
-    ├── bot/          # API para el mesero de n8n: llaves, configuración y cuentas
-    ├── bot-events/   # avisos firmados de la API a n8n
+    ├── bot/          # API para el mesero: llaves, configuración y cuentas
+    ├── bot-events/   # avisos firmados de la API al mesero
     └── health/
 ```
 
 ## Mesero de WhatsApp
 
-La conversación con el comensal corre en **n8n**, fuera de este repo: QR con verificación de ubicación, pedidos, cuenta, pagos y facturas. La API no recibe mensajes de WhatsApp ni los envía.
+La conversación con el comensal corre en el **servicio del mesero** ([cosunab/botbite-mesero](https://github.com/cosunab/botbite-mesero)), fuera de este repo, con n8n para tareas secundarias: QR con verificación de ubicación, pedidos, cuenta, pagos y facturas. La API no recibe mensajes de WhatsApp ni los envía.
 
 La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el panel lo muestra en vivo por Socket.IO, en el namespace `/orders`.
 
-**API del bot:** n8n llama a `/v1/bot/*` con el header `X-BotBite-Key`.
+**API del bot:** el mesero llama a `/v1/bot/*` con el header `X-BotBite-Key`.
 - Cada llave pertenece a una sucursal, y la sucursal siempre sale de la llave. Solo se guarda su hash y se muestra una sola vez.
-- `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si n8n envía `If-None-Match`, contesta `304` cuando nada cambió.
+- `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si el mesero envía `If-None-Match`, contesta `304` cuando nada cambió.
 - `POST /v1/bot/orders` abre la cuenta con su primera ronda y `POST /v1/bot/orders/:code/rounds` agrega comandas. Reenviar el mismo `code` o `number` no duplica nada. La API pone los precios con el menú vigente.
 - `PATCH /v1/bot/orders/:code` avanza la cuenta. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina.
 - `POST /v1/bot/payments` registra un pago aprobado: cierra la cuenta y abona el cashback. Reenviar el mismo `providerPaymentId` no lo procesa dos veces.
@@ -140,19 +140,19 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 
 **Pagos:** `payments` guarda todo pago aprobado, aunque no cuadre, porque el dinero ya entró: `approved` cerró la cuenta, `incomplete` llegó de menos y la cuenta sigue abierta, y `unmatched` no tiene cuenta o ya estaba cerrada. En los dos últimos caja recibe una alerta. No se guarda la respuesta cruda de Mercado Pago porque trae datos del pagador.
 
-**Avisos a n8n:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, occurredAt, data }`. Los tipos son `round.status_changed`, `order.closed` y `catalog.changed`. Son de mejor esfuerzo: se reintentan y, si n8n no responde, solo se registra.
+**Avisos al mesero:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, restaurantSlug, branchSlug, occurredAt, data }`. Si `botBaseUrl` trae query (por ejemplo `?negocio=punto-de-union`), se conserva: `https://mesero/portal-evento?negocio=punto-de-union`. Los tipos son `round.status_changed`, `order.closed` y `catalog.changed`. Son de mejor esfuerzo: se reintentan y, si n8n no responde, solo se registra.
 
-Para validarlos, n8n recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<cuerpo>` con `BOT_WEBHOOK_SECRET` y lo compara con `X-BotBite-Signature: sha256=<hex>`.
+Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<cuerpo>` con `BOT_WEBHOOK_SECRET` y lo compara con `X-BotBite-Signature: sha256=<hex>`.
 
 **Configuración de la sucursal:** se edita en el panel, en la pantalla "Mesero digital".
 
 | Método | Ruta | Quién |
 | --- | --- | --- |
-| `GET`, `PATCH` | `/v1/branches/:restaurantId/:branchId/bot-config` | Dueño o admin. Slug, `phone_number_id`, URL de n8n y funciones contratadas: solo admin |
+| `GET`, `PATCH` | `/v1/branches/:restaurantId/:branchId/bot-config` | Dueño o admin. Slug, `phone_number_id`, URL del mesero y funciones contratadas: solo admin |
 | `GET`, `POST` | `/v1/branches/:restaurantId/:branchId/bot-keys` | Solo admin |
 | `DELETE` | `/v1/branches/:restaurantId/:branchId/bot-keys/:keyId` | Solo admin |
 
-**QR:** el QR impreso abre `botbite.com.mx/m/<slug>`, que redirige a la página del mesero. Si n8n cambia de servidor, basta con cambiar la redirección en la landing; si cambia el slug, hay que generar e imprimir el QR de nuevo.
+**QR:** el QR impreso abre `botbite.com.mx/m/<slug>`, que redirige a la página del mesero. Si la página del QR cambia de servidor, basta con cambiar la redirección en la landing; si cambia el slug, hay que generar e imprimir el QR de nuevo.
 
 **Rutas temporales:** `GET /v1/messages/notifications`, `PATCH /v1/messages/:id/read` y `/unread` siguen respondiendo para no romper el panel mientras se despliega; las nuevas están en `/v1/notifications`. `GET /v1/messages/conversations` responde una lista vacía hasta que la pantalla de Órdenes use las cuentas nuevas.
 
@@ -207,7 +207,7 @@ Las e2e levantan la app completa contra Postgres real. Cubren:
 - categorías por restaurante y slugs;
 - configuración del mesero, llaves y `GET /v1/bot/branch`;
 - cuentas, rondas y sus estados, con carga simultánea y reintentos;
-- avisos firmados a n8n, contra un servidor local;
+- avisos firmados al mesero, contra un servidor local;
 - notificaciones;
 - WebSocket.
 

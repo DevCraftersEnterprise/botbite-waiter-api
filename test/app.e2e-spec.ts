@@ -2094,10 +2094,12 @@ describe('BotBite API (e2e)', () => {
       });
     });
 
-    describe('events to n8n', () => {
+    describe('events to the waiter service', () => {
       interface ReceivedEvent {
         type: string;
         branchId: string;
+        restaurantSlug: string;
+        branchSlug: string;
         data: Record<string, unknown>;
       }
       const received: ReceivedEvent[] = [];
@@ -2115,7 +2117,7 @@ describe('BotBite API (e2e)', () => {
       };
 
       beforeAll(async () => {
-        // Hace de n8n: recibe los avisos y valida su firma.
+        // Hace del mesero: recibe los avisos y valida su firma.
         server = createServer((req, res) => {
           let body = '';
           req.setEncoding('utf8');
@@ -2128,7 +2130,8 @@ describe('BotBite API (e2e)', () => {
               body,
             );
             if (
-              req.url !== '/webhook/mesero-centro/portal-evento' ||
+              req.url !==
+                '/webhook/mesero-centro/portal-evento?negocio=tacos' ||
               req.headers['x-botbite-signature'] !== expected
             ) {
               invalid.push(body);
@@ -2143,7 +2146,7 @@ describe('BotBite API (e2e)', () => {
         await dataSource.getRepository(Branch).update(
           { id: seed.branchA.id },
           {
-            botBaseUrl: `http://127.0.0.1:${port}/webhook/mesero-centro`,
+            botBaseUrl: `http://127.0.0.1:${port}/webhook/mesero-centro?negocio=tacos`,
           },
         );
       });
@@ -2171,6 +2174,13 @@ describe('BotBite API (e2e)', () => {
 
         const event = await waitForEvent('round.status_changed');
         expect(event.branchId).toBe(seed.branchA.id);
+        const branch = await dataSource.getRepository(Branch).findOneOrFail({
+          where: { id: seed.branchA.id },
+          relations: { restaurant: true },
+        });
+        expect(event.restaurantSlug).toBe(branch.restaurant.slug);
+        expect(event.branchSlug).toBe(branch.slug);
+        expect(invalid).toEqual([]);
         expect(event.data).toEqual({
           orderCode: code,
           roundNumber: 1,

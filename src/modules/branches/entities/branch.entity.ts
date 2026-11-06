@@ -67,7 +67,7 @@ export class Branch extends BaseEntity {
   @Column({ type: 'varchar', length: 30, nullable: true })
   whatsappPhoneNumberId: string | null;
 
-  /** URL base de los webhooks de n8n de esta sucursal. */
+  /** URL base del servicio del mesero de esta sucursal; puede llevar query. */
   @Column({ type: 'varchar', nullable: true })
   botBaseUrl: string | null;
 

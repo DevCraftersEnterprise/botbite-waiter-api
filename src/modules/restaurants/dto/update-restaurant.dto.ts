@@ -13,7 +13,7 @@ import { SLUG_PATTERN } from '@/common/utils/slug.util';
 import { CreateRestaurantDto } from '@/modules/restaurants/dto/create-restaurant.dto';
 
 export class UpdateRestaurantDto extends PartialType(CreateRestaurantDto) {
-  /** Solo SUPER/ADMIN: n8n lo usa para identificar el monedero. */
+  /** Solo SUPER/ADMIN: el mesero lo usa para identificar el monedero. */
   @IsOptional()
   @IsString()
   @MaxLength(60)

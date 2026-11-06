@@ -50,7 +50,7 @@ export const setupDocs = (app: NestExpressApplication): void => {
     app,
     new DocumentBuilder()
       .setTitle('BotBite API · Mesero de WhatsApp')
-      .setDescription('Rutas que consume el mesero de n8n.')
+      .setDescription('Rutas que consume el servicio del mesero de WhatsApp.')
       .setVersion('1.0')
       .addApiKey(
         { type: 'apiKey', name: 'X-BotBite-Key', in: 'header' },

@@ -26,7 +26,7 @@ export interface CatalogScope {
   categoryId?: number;
 }
 
-/** Firma que n8n debe recalcular: HMAC-SHA256 de `<timestamp>.<cuerpo>`. */
+/** Firma que el mesero debe recalcular: HMAC-SHA256 de `<timestamp>.<cuerpo>`. */
 export const signBotEvent = (
   secret: string,
   timestamp: string,
@@ -35,8 +35,18 @@ export const signBotEvent = (
   `sha256=${createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`;
 
 /**
- * Avisa a n8n de lo que pasa en el portal. Es de mejor esfuerzo: si n8n no
- * responde se reintenta y se registra, sin afectar la operación del panel.
+ * Agrega la ruta de los avisos a la URL base sin perder su query: el servicio
+ * del mesero atiende varios negocios y puede elegirlos con `?negocio=`.
+ */
+export const botEventsUrl = (baseUrl: string): string => {
+  const url = new URL(baseUrl);
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/${EVENTS_PATH}`;
+  return url.toString();
+};
+
+/**
+ * Avisa al servicio del mesero de lo que pasa en el portal. Es de mejor
+ * esfuerzo: si no responde se reintenta y se registra, sin afectar al panel.
  */
 @Injectable()
 export class BotEventsService implements OnModuleDestroy {
@@ -61,7 +71,7 @@ export class BotEventsService implements OnModuleDestroy {
     this.pendingCatalog.clear();
   }
 
-  /** No espera a n8n: el panel responde aunque n8n esté caído. */
+  /** No espera al mesero: el panel responde aunque el servicio esté caído. */
   emit(branchId: string, type: BotEventType, data: object = {}): void {
     this.deliver(branchId, type, data).catch((error) =>
       this.logger.warn(`Event ${type} not sent: ${errorMessage(error)}`),
@@ -128,15 +138,24 @@ export class BotEventsService implements OnModuleDestroy {
 
     const branch = await this.branchRepository.findOne({
       where: { id: branchId },
-      select: { id: true, botBaseUrl: true },
+      relations: { restaurant: true },
+      select: {
+        id: true,
+        slug: true,
+        botBaseUrl: true,
+        restaurant: { id: true, slug: true },
+      },
     });
 
     if (!branch?.botBaseUrl) return;
 
-    const url = `${branch.botBaseUrl}/${EVENTS_PATH}`;
+    const url = botEventsUrl(branch.botBaseUrl);
+    // Los slugs le permiten al mesero elegir el negocio sin guardar nuestros ids.
     const body = JSON.stringify({
       type,
       branchId,
+      restaurantSlug: branch.restaurant.slug,
+      branchSlug: branch.slug,
       occurredAt: new Date().toISOString(),
       data,
     });
@@ -167,6 +186,7 @@ export class BotEventsService implements OnModuleDestroy {
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
 
-    if (!response.ok) throw new Error(`n8n answered ${response.status}`);
+    if (!response.ok)
+      throw new Error(`The waiter service answered ${response.status}`);
   }
 }
