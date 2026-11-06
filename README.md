@@ -129,8 +129,9 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 - `POST /v1/bot/orders` abre la cuenta con su primera ronda y `POST /v1/bot/orders/:code/rounds` agrega comandas. Reenviar el mismo `code` o `number` no duplica nada. La API pone los precios con el menú vigente.
 - `PATCH /v1/bot/orders/:code` avanza la cuenta. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina.
 - `POST /v1/bot/payments` registra un pago aprobado: cierra la cuenta y abona el cashback. Reenviar el mismo `providerPaymentId` no lo procesa dos veces.
+- `POST /v1/bot/invoices` registra una factura que FacturAPI ya timbró. Reenviar el mismo `providerInvoiceId` no la registra dos veces.
 - `POST /v1/bot/daily-close` cierra las cuentas de WhatsApp que nadie pidió.
-- `POST /v1/bot/customers/lookup` y `PATCH /v1/bot/customers` leen y guardan al comensal. El teléfono va en el cuerpo para que no quede en los logs.
+- `POST /v1/bot/customers/lookup` y `PATCH /v1/bot/customers` leen y guardan al comensal. El teléfono va en el cuerpo para que no quede en los logs. Los datos fiscales solo vienen con `includeTaxProfile: true`.
 - `POST /v1/bot/notifications` manda avisos sueltos a caja.
 - Las rutas están documentadas en Swagger, en `/docs`.
 
@@ -139,6 +140,12 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 **Monedero:** `restaurant_customers` guarda al comensal por restaurante y `wallet_movements` cada cambio de saldo. El saldo se comparte entre las sucursales de un restaurante y nunca entre restaurantes. El descuento se aplica una vez al pedir la cuenta, topado al saldo y al subtotal, y se devuelve si se cancela la cuenta o si una comanda cancelada deja la cuenta por debajo del descuento. El cashback se calcula sobre lo consumido, sin propina, y solo al pagar en línea.
 
 **Pagos:** `payments` guarda todo pago aprobado, aunque no cuadre, porque el dinero ya entró: `approved` cerró la cuenta, `incomplete` llegó de menos y la cuenta sigue abierta, y `unmatched` no tiene cuenta o ya estaba cerrada. En los dos últimos caja recibe una alerta. No se guarda la respuesta cruda de Mercado Pago porque trae datos del pagador.
+
+**Facturas:** la API no timbra. El servicio del mesero timbra en FacturAPI y registra el resultado en `invoices`, que guarda lo que dice el CFDI (folio, UUID del SAT, RFC, razón social, uso, forma de pago y total sin propina) pero no el correo. Caja recibe un aviso por cada factura y una alerta si una cuenta recibe una segunda. Las facturas con error no se registran: el mesero avisa a caja con `POST /v1/bot/notifications`.
+
+**Datos fiscales:** `customer_tax_profiles` guarda los datos del comensal por restaurante, solo si aceptó guardarlos y en la misma transacción que una factura timbrada. Una factura nueva con permiso los reemplaza, y `PATCH /v1/bot/customers` con `deleteTaxProfile: true` los borra de la base, sin `deletedAt`.
+
+**Cobros en el panel:** `GET /v1/orders/billing?branchId=<id>&date=YYYY-MM-DD` devuelve los pagos en línea y las facturas de un día en la zona horaria de la sucursal; sin `date`, los de hoy. La ven el dueño, los admins y el personal de la sucursal.
 
 **Avisos al mesero:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, restaurantSlug, branchSlug, occurredAt, data }`. Si `botBaseUrl` trae query (por ejemplo `?negocio=punto-de-union`), se conserva: `https://mesero/portal-evento?negocio=punto-de-union`. Los tipos son `round.status_changed`, `order.closed` y `catalog.changed`. Son de mejor esfuerzo: se reintentan y, si n8n no responde, solo se registra.
 

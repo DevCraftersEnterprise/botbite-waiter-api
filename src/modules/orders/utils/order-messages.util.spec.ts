@@ -1,3 +1,4 @@
+import { Invoice } from '@/modules/orders/entities/invoice.entity';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { Payment } from '@/modules/orders/entities/payment.entity';
@@ -6,8 +7,10 @@ import {
   closedAccountPaymentMessage,
   dailyCloseMessage,
   incompletePaymentMessage,
+  invoiceMessage,
   paymentMessage,
   payWithWaiterMessage,
+  repeatedInvoiceMessage,
   roundMessage,
   unmatchedPaymentMessage,
 } from '@/modules/orders/utils/order-messages.util';
@@ -119,6 +122,24 @@ describe('payment messages', () => {
     );
     expect(unmatchedPaymentMessage(payment)).toBe(
       '⚠️ Llegó un pago de $231.00 sin cuenta asociada. Revísalo en Mercado Pago (operación 123).',
+    );
+  });
+});
+
+describe('invoice messages', () => {
+  const invoice = { folio: '124', total: '210.00' } as unknown as Invoice;
+
+  it('announces the invoice without fiscal data', () => {
+    expect(invoiceMessage(order, invoice)).toBe(
+      '🧾 Se emitió la factura 124 de Sergio en la mesa A5 por $210.00.',
+    );
+  });
+
+  it('warns about a second invoice for the same account', () => {
+    const previous = { folio: '123' } as unknown as Invoice;
+
+    expect(repeatedInvoiceMessage(order, invoice, previous)).toBe(
+      '⚠️ Se emitió la factura 124 de Sergio en la mesa A5, pero esa cuenta ya tenía la factura 123. Revisa en FacturAPI si hay que cancelar una.',
     );
   });
 });

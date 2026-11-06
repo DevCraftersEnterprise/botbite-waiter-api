@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { CustomersService } from '@/modules/customers/customers.service';
 import { CustomersController } from '@/modules/customers/customers.controller';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { CustomerTaxProfile } from '@/modules/customers/entities/customer-tax-profile.entity';
 import { Customer } from '@/modules/customers/entities/customer.entity';
 import { RestaurantCustomer } from '@/modules/customers/entities/restaurant-customer.entity';
 import { WalletMovement } from '@/modules/customers/entities/wallet-movement.entity';
@@ -23,7 +24,12 @@ import { RemoveCustomerUseCase } from '@/modules/customers/use-cases/remove-cust
     RemoveCustomerUseCase,
   ],
   imports: [
-    TypeOrmModule.forFeature([Customer, RestaurantCustomer, WalletMovement]),
+    TypeOrmModule.forFeature([
+      Customer,
+      RestaurantCustomer,
+      WalletMovement,
+      CustomerTaxProfile,
+    ]),
     CommonModule,
   ],
   exports: [TypeOrmModule, CustomersService, RestaurantCustomersService],

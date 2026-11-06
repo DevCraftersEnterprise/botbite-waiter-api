@@ -16,6 +16,7 @@ import { Auth } from '@/core/auth/decorators/auth.decorator';
 import { CurrentUser } from '@/core/auth/decorators/current-user.decorator';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { AddRoundDto } from '@/modules/orders/dto/add-round.dto';
+import { FindBillingDto } from '@/modules/orders/dto/find-billing.dto';
 import { OpenTabDto } from '@/modules/orders/dto/open-tab.dto';
 import { UpdateRoundStatusDto } from '@/modules/orders/dto/update-round-status.dto';
 import { OrdersService } from '@/modules/orders/orders.service';
@@ -73,6 +74,17 @@ export class OrdersController {
   ) {
     await this.accessControl.assertBranchAccess(user, branchId, 'branch');
     return this.ordersService.summary(branchId);
+  }
+
+  /** Pagos en línea y facturas del día, en la zona horaria de la sucursal. */
+  @Get('billing')
+  @Auth(ORDER_ROLES)
+  async billing(
+    @Query() { branchId, date }: FindBillingDto,
+    @CurrentUser() user: User,
+  ) {
+    await this.accessControl.assertBranchAccess(user, branchId, 'branch');
+    return this.ordersService.billing(branchId, date);
   }
 
   @Post('tabs')
