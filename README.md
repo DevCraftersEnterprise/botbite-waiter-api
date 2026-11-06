@@ -164,9 +164,6 @@ Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<c
 **Mesas:** si la sucursal tiene lista de mesas, la API rechaza con `400` las que no están, vengan del bot o del personal, y guarda la mesa como está escrita en la lista (`a5` queda `A5`). Sin lista acepta cualquiera.
 
 **QR:** el QR impreso abre `botbite.com.mx/m/<slug>`, que redirige a la página del mesero. Si la página del QR cambia de servidor, basta con cambiar la redirección en la landing; si cambia el slug, hay que generar e imprimir el QR de nuevo.
-
-**Rutas temporales:** `GET /v1/messages/notifications`, `PATCH /v1/messages/:id/read` y `/unread` siguen respondiendo para no romper el panel mientras se despliega; las nuevas están en `/v1/notifications`. `GET /v1/messages/conversations` responde una lista vacía hasta que la pantalla de Órdenes use las cuentas nuevas.
-
 ## Roles y permisos
 
 | Rol | Alcance |

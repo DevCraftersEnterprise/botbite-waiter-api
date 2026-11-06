@@ -196,11 +196,6 @@ describe('BotBite API (e2e)', () => {
         .get(`/v1/orders?branchId=${seed.branchA.id}`)
         .set(auth(access_token))
         .expect(403);
-
-      await http()
-        .get(`/v1/messages/conversations?branchId=${seed.branchA.id}`)
-        .set(auth(access_token))
-        .expect(403);
     });
 
     it('no longer accepts message credits', async () => {
@@ -890,34 +885,40 @@ describe('BotBite API (e2e)', () => {
       await http().patch(itemUrl('read')).set(auth(token)).expect(403);
     });
 
-    it('keeps the previous panel routes while the panel is deployed', async () => {
+    it('the previous panel routes and the WhatsApp webhook no longer exist', async () => {
       const token = await tokenFor(seed.clientA.email);
       const branchQuery = `branchId=${seed.branchA.id}`;
 
-      const notifications = await http()
+      await http()
         .get(`/v1/messages/notifications?${branchQuery}`)
         .set(auth(token))
-        .expect(200);
-      expect(activeIds(notifications.body)).toEqual([seed.notification.id]);
-
-      const conversations = await http()
+        .expect(404);
+      await http()
         .get(`/v1/messages/conversations?${branchQuery}`)
         .set(auth(token))
-        .expect(200);
-      expect(conversations.body).toEqual({ conversations: [], total: 0 });
-
+        .expect(404);
       await http()
         .patch(`/v1/messages/${seed.notification.id}/read`)
         .set(auth(token))
-        .expect(200);
-      await http()
-        .patch(`/v1/messages/${seed.notification.id}/unread`)
-        .set(auth(token))
-        .expect(200);
+        .expect(404);
+      await http().post('/v1/messages/webhook').send({}).expect(404);
     });
 
-    it('the WhatsApp webhook no longer exists', async () => {
-      await http().post('/v1/messages/webhook').send({}).expect(404);
+    it('the Twilio tables and columns are gone', async () => {
+      const tables: { table_name: string }[] = await dataSource.query(
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = 'public'
+           AND table_name IN ('conversations', 'conversation_messages', 'processed_messages', 'templates')`,
+      );
+      expect(tables).toEqual([]);
+
+      const columns: { column: string }[] = await dataSource.query(
+        `SELECT table_name || '.' || column_name AS "column"
+         FROM information_schema.columns
+         WHERE table_schema = 'public'
+           AND (table_name, column_name) IN (('branches', 'availableMessages'), ('branches', 'qrToken'), ('orders', 'interactions'))`,
+      );
+      expect(columns).toEqual([]);
     });
   });
 
