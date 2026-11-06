@@ -134,4 +134,10 @@ export class EnvironmentVariables {
   @IsNumber()
   @Type(() => Number)
   THROTTLE_LOGIN_LIMIT?: number;
+
+  // Peticiones por minuto de cada llave del bot.
+  @IsOptional()
+  @IsNumber()
+  @Type(() => Number)
+  THROTTLE_BOT_LIMIT?: number;
 }

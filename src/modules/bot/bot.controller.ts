@@ -43,6 +43,7 @@ import { UpdateBotCustomerDto } from '@/modules/bot/dto/update-bot-customer.dto'
 import { UpdateBotOrderDto } from '@/modules/bot/dto/update-bot-order.dto';
 import { BotKeyGuard } from '@/modules/bot/guards/bot-key.guard';
 import { BotConfigService } from '@/modules/bot/services/bot-config.service';
+import { BOT_IP_LIMIT } from '@/modules/bot/utils/bot-throttle.util';
 import { RestaurantCustomersService } from '@/modules/customers/services/restaurant-customers.service';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
 import { Order } from '@/modules/orders/entities/order.entity';
@@ -64,15 +65,15 @@ const toRoundResponse = ({ created, order, round }: RoundResult) => ({
 });
 
 /**
- * Rutas que consume el servicio del mesero. Todas las peticiones salen de la misma IP
- * (el VPS), así que llevan un límite propio más alto que el del panel.
+ * Rutas que consume el servicio del mesero. El límite que cuenta es por llave
+ * (`THROTTLE_BOT_LIMIT`); el de IP solo frena a quien inventa llaves.
  */
 @ApiTags('Bot')
 @ApiSecurity('bot-key')
 @ApiUnauthorizedResponse({ description: 'Llave faltante, inválida o revocada' })
 @Controller('bot')
 @UseGuards(BotKeyGuard)
-@Throttle({ default: { limit: 1000, ttl: 60_000 } })
+@Throttle({ default: { limit: BOT_IP_LIMIT, ttl: 60_000 } })
 export class BotController {
   constructor(
     private readonly botConfigService: BotConfigService,

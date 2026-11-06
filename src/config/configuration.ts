@@ -49,6 +49,8 @@ export default () => {
       ttlMs: parseInt(process.env.THROTTLE_TTL ?? '60', 10) * 1000,
       limit: parseInt(process.env.THROTTLE_LIMIT ?? '100', 10),
       loginLimit: parseInt(process.env.THROTTLE_LOGIN_LIMIT ?? '5', 10),
+      // Por llave del bot, no por IP.
+      botLimit: parseInt(process.env.THROTTLE_BOT_LIMIT ?? '1000', 10),
     },
     bot: {
       // Firma los avisos al servicio del mesero. Sin él no se envían.
