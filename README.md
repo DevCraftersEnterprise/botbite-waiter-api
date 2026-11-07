@@ -18,7 +18,7 @@ API de **BotBite**, el mesero virtual por WhatsApp para restaurantes. Es la fuen
 - [Roles y permisos](#roles-y-permisos)
 - [Concurrencia y escalabilidad](#concurrencia-y-escalabilidad)
 - [Pruebas](#pruebas)
-- [CI y rama protegida](#ci-y-rama-protegida)
+- [CI y ramas protegidas](#ci-y-ramas-protegidas)
 - [Solución de problemas](#solución-de-problemas)
 
 ## Puesta en marcha
@@ -219,11 +219,12 @@ Las e2e levantan la app completa contra Postgres real. Cubren:
 - notificaciones;
 - WebSocket.
 
-## CI y rama protegida
+## CI y ramas protegidas
 
-- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): en cada PR hacia `main` y en cada push a `main` corre lint, las pruebas unitarias, el build y las e2e contra un Postgres 16 vacío. No usa secretos.
-- **`main` protegida:** solo entra por PR y con el check `test` en verde. No se borra ni acepta force-push, y la regla aplica también a los administradores.
-- **Despliegue:** Render despliega `main` como siempre. Como solo entra lo que pasó la CI, lo que despliega ya está probado.
+- **Ramas:** el trabajo se integra en `dev` (rama por defecto) y pasa a producción con un PR de `dev` a `main`.
+- **CI** ([.github/workflows/ci.yml](.github/workflows/ci.yml)): en cada PR hacia `dev` o `main`, y en cada push a esas ramas, corre lint, las pruebas unitarias, el build y las e2e contra un Postgres 16 vacío. No usa secretos.
+- **`dev` y `main` protegidas:** solo entra por PR y con el check `test` en verde. No se borran ni aceptan force-push, y la regla aplica también a los administradores.
+- **Despliegue:** Render despliega `main`; `dev` no se despliega. Como solo entra lo que pasó la CI, lo que despliega ya está probado.
 
 ## Solución de problemas
 
