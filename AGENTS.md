@@ -16,9 +16,14 @@ El mesero de WhatsApp es un servicio en Node.js que mantiene Carlos (`github.com
 
 ### Ramas, commits y PRs
 
-- No se hace commit directo a `main`. Cada cambio sale de `main` actualizado (`git pull`) en su propia rama: `feat/`, `fix/`, `refactor/`, `chore/` o `docs/`.
+- Hay dos ramas fijas:
+  - `dev`: donde se integra el trabajo. Es la rama por defecto.
+  - `main`: producción. Lo que entra a `main` se despliega solo.
+- No se hace commit directo a `dev` ni a `main`. Cada cambio sale de `dev` actualizado (`git pull`) en su propia rama: `feat/`, `fix/`, `refactor/`, `chore/` o `docs/`.
 - Los commits van en inglés con Conventional Commits: `feat: …`, `fix(netlify): …`, `chore(node): …`.
-- Un PR por rama hacia `main`. Lo revisa e integra Sergio. Si el cambio toca varios repos, cada PR dice en qué orden se integran y despliegan.
+- Un PR por rama hacia `dev`. Lo revisa e integra Sergio. Si el cambio toca varios repos, cada PR dice en qué orden se integran y despliegan.
+- Para pasar a producción se abre un PR de `dev` a `main`, y se integra con merge commit (no squash) para que las dos ramas no se separen. Si algo sale mal en `dev`, se corrige ahí con otro PR y no llega a producción.
+- Un arreglo urgente sigue el mismo camino: PR a `dev` y luego el PR de `dev` a `main`.
 - Haz push seguido: lo que solo está en tu disco se puede perder.
 
 ### Idioma
@@ -57,7 +62,8 @@ El mesero de WhatsApp es un servicio en Node.js que mantiene Carlos (`github.com
 
 ### Después de integrar
 
-- `main` se despliega solo. Revisa el despliegue y verifica en producción lo que cambiaste: la salud de la API, la pantalla afectada o un `curl`.
+- Integrar a `dev` no despliega a producción.
+- Al integrar el PR de `dev` a `main`, producción se despliega sola. Revisa el despliegue y verifica en producción lo que cambiaste: la salud de la API, la pantalla afectada o un `curl`.
 
 ## Este repo: API
 
@@ -111,8 +117,8 @@ npm run test:e2e                   # configurable con E2E_DB_HOST, _PORT, _USERN
 
 Después de desplegar, revisa los logs del deploy y corre `curl https://api.botbite.com.mx/v1/health`.
 
-### CI y rama protegida
+### CI y ramas protegidas
 
-- `main` solo acepta PRs con el check `test` en verde: lint, unitarias, build y e2e contra Postgres 16. No hay excepción para administradores, así que no hay atajo para un hotfix: también va por PR.
+- `dev` y `main` solo aceptan PRs con el check `test` en verde: lint, unitarias, build y e2e contra Postgres 16. No hay excepción para administradores, así que no hay atajo para un hotfix: también va por PR a `dev`.
 - Antes de abrir el PR corre lo mismo que la CI: `npm run lint:check`, `npm test`, `npm run build` y `npm run test:e2e` contra un Postgres local.
 - Si la CI falla, se corrige en la rama; no se fuerza el merge.
