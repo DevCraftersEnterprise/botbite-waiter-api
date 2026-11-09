@@ -104,5 +104,29 @@
     "orderitem_updated": "Item de orden actualizado exitosamente",
     "orderitem_deleted": "Item de orden eliminado exitosamente",
     "orderitem_not_found": "Item de orden no encontrado"
+  },
+  "menu_csv": {
+    "empty_file": "El archivo está vacío.",
+    "too_many_rows": "El archivo tiene {{count}} filas y el máximo es {{max}}. Divídelo en varios.",
+    "missing_column": "Falta la columna \"{{column}}\".",
+    "duplicate_column": "La columna \"{{column}}\" viene dos veces.",
+    "unknown_column": "La columna \"{{column}}\" no se usa y se ignora.",
+    "required": "Es obligatorio.",
+    "too_long": "Es muy largo: el máximo es {{max}} caracteres.",
+    "price_invalid": "No es un precio válido. Escribe solo el número, por ejemplo 120.50.",
+    "price_not_positive": "El precio debe ser mayor que cero.",
+    "price_too_high": "El precio debe ser menor que 1,000,000.",
+    "yes_no_invalid": "Escribe sí o no.",
+    "photo_invalid": "No es una URL válida.",
+    "photo_not_https": "La URL de la foto debe empezar con https://.",
+    "photo_too_long": "La URL de la foto es muy larga.",
+    "duplicate_name": "Este producto ya viene en la fila {{row}}.",
+    "similar_name": "Se parece a \"{{name}}\", que está en el menú y no viene en el archivo. Si es el mismo producto con otro nombre, corrige el nombre para no duplicarlo.",
+    "inactive_product": "El producto está desactivado en el restaurante: no se verá en el menú aunque diga activo.",
+    "inactive_category": "La categoría está desactivada: sus productos no se verán en el menú.",
+    "repeated_in_menu": "El producto está {{count}} veces en este menú; se actualiza solo una.",
+    "has_errors": "El archivo tiene errores y no se guardó nada. Corrígelos y vuelve a subirlo.",
+    "imported": "Menú importado: {{created}} productos nuevos, {{added}} agregados de otros menús y {{updated}} actualizados.",
+    "photo_failed": "No se pudo copiar la foto. El producto se guardó sin ella."
   }
 }

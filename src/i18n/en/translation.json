@@ -103,5 +103,29 @@
     "orderitem_updated": "Order item updated successfully",
     "orderitem_deleted": "Order item deleted successfully",
     "orderitem_not_found": "Order item not found"
+  },
+  "menu_csv": {
+    "empty_file": "The file is empty.",
+    "too_many_rows": "The file has {{count}} rows and the maximum is {{max}}. Split it into several files.",
+    "missing_column": "The \"{{column}}\" column is missing.",
+    "duplicate_column": "The \"{{column}}\" column appears twice.",
+    "unknown_column": "The \"{{column}}\" column is not used and is ignored.",
+    "required": "This value is required.",
+    "too_long": "Too long: the maximum is {{max}} characters.",
+    "price_invalid": "Not a valid price. Write just the number, for example 120.50.",
+    "price_not_positive": "The price must be greater than zero.",
+    "price_too_high": "The price must be less than 1,000,000.",
+    "yes_no_invalid": "Write yes or no.",
+    "photo_invalid": "Not a valid URL.",
+    "photo_not_https": "The photo URL must start with https://.",
+    "photo_too_long": "The photo URL is too long.",
+    "duplicate_name": "This product is already in row {{row}}.",
+    "similar_name": "Looks like \"{{name}}\", which is on the menu and not in the file. If it is the same product with another name, fix the name so it is not duplicated.",
+    "inactive_product": "The product is switched off for the restaurant: it will not show on the menu even if it says active.",
+    "inactive_category": "The category is switched off: its products will not show on the menu.",
+    "repeated_in_menu": "The product is {{count}} times on this menu; only one is updated.",
+    "has_errors": "The file has errors and nothing was saved. Fix them and upload it again.",
+    "imported": "Menu imported: {{created}} new products, {{added}} added from other menus and {{updated}} updated.",
+    "photo_failed": "The photo could not be copied. The product was saved without it."
   }
 }
