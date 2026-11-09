@@ -16,6 +16,7 @@ import { AuthModule } from '@/modules/auth/auth.module';
 import { BranchesModule } from '@/modules/branches/branches.module';
 import { CategoriesModule } from '@/modules/categories/categories.module';
 import { CustomersModule } from '@/modules/customers/customers.module';
+import { AuditModule } from '@/modules/audit/audit.module';
 import { HealthModule } from '@/modules/health/health.module';
 import { MenusModule } from '@/modules/menus/menus.module';
 import { BotEventsModule } from '@/modules/bot-events/bot-events.module';
@@ -81,6 +82,7 @@ import { UsersModule } from '@/modules/users/users.module';
     MenusModule,
     OrdersModule,
     CustomersModule,
+    AuditModule,
     NotificationsModule,
     BotEventsModule,
     BotModule,

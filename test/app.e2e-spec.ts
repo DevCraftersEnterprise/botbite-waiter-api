@@ -16,10 +16,16 @@ import { configureApp } from '@/app.setup';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { Category } from '@/modules/categories/entities/category.entity';
+import { AuditLog } from '@/modules/audit/entities/audit-log.entity';
 import { CustomerTaxProfile } from '@/modules/customers/entities/customer-tax-profile.entity';
 import { Customer } from '@/modules/customers/entities/customer.entity';
 import { RestaurantCustomer } from '@/modules/customers/entities/restaurant-customer.entity';
 import { WalletMovement } from '@/modules/customers/entities/wallet-movement.entity';
+import {
+  PromosStatus,
+  WalletMovementType,
+} from '@/modules/customers/enums/customer.enums';
+import { CustomerReportService } from '@/modules/customers/services/customer-report.service';
 import { MenuPhotoService } from '@/modules/menus/csv/menu-photo.service';
 import { RestaurantLogoStorage } from '@/modules/restaurants/restaurant-logo.storage';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
@@ -27,7 +33,10 @@ import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
 import { NotificationType } from '@/modules/notifications/enums/notification-type.enum';
 import { Invoice } from '@/modules/orders/entities/invoice.entity';
+import { OrderItem } from '@/modules/orders/entities/order-item.entity';
+import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
+import { OrderStatus, RoundStatus } from '@/modules/orders/enums/order.enums';
 import { Payment } from '@/modules/orders/entities/payment.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
@@ -3270,6 +3279,315 @@ describe('BotBite API (e2e)', () => {
           contentType: 'text/csv',
         })
         .expect(400);
+    });
+  });
+
+  describe('customers screen', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const daysAgo = (days: number) => new Date(Date.now() - days * DAY);
+    const url = () => `/v1/restaurants/${seed.restaurantB.id}/customers`;
+    const ids: Record<string, string> = {};
+
+    const list = async (query = '') => {
+      const token = await tokenFor(seed.clientB.email);
+      return http().get(`${url()}${query}`).set(auth(token)).expect(200);
+    };
+    const names = (body: unknown) =>
+      (body as { customers: { name: string }[] }).customers.map((c) => c.name);
+
+    beforeAll(async () => {
+      const customers = dataSource.getRepository(Customer);
+      const memberships = dataSource.getRepository(RestaurantCustomer);
+      const orders = dataSource.getRepository(Order);
+      const rounds = dataSource.getRepository(OrderRound);
+      const items = dataSource.getRepository(OrderItem);
+      const restaurantId = seed.restaurantB.id;
+
+      const people = [
+        // Recurrente: 2 cuentas pagadas, una cancelada y cashback.
+        {
+          name: 'Ana',
+          phone: '+5216779900001',
+          visits: 3,
+          first: 90,
+          last: 2,
+          promos: PromosStatus.ACCEPTED,
+          unsubscribed: false,
+          wallet: 10,
+        },
+        {
+          name: 'Beto',
+          phone: '+5216779900002',
+          visits: 1,
+          first: 0,
+          last: 0,
+          promos: PromosStatus.PENDING,
+          unsubscribed: false,
+          wallet: 0,
+        },
+        // Inactivo y dado de baja, aunque había aceptado.
+        {
+          name: 'Caro',
+          phone: '+5216779900003',
+          visits: 2,
+          first: 100,
+          last: 45,
+          promos: PromosStatus.DECLINED,
+          unsubscribed: true,
+          wallet: 0,
+        },
+        {
+          name: 'Dani',
+          phone: '+5216779900004',
+          visits: 2,
+          first: 60,
+          last: 5,
+          promos: PromosStatus.DECLINED,
+          unsubscribed: false,
+          wallet: 0,
+        },
+      ];
+
+      for (const person of people) {
+        const customer = await customers.save(
+          customers.create({ name: person.name, phone: person.phone }),
+        );
+        const membership = await memberships.save(
+          memberships.create({
+            restaurantId,
+            customerId: customer.id,
+            visits: person.visits,
+            firstVisitAt: daysAgo(person.first),
+            lastVisitAt: daysAgo(person.last),
+            promos: person.promos,
+            promosAt: daysAgo(person.last),
+            unsubscribedAt: person.unsubscribed ? daysAgo(40) : null,
+            walletBalance: person.wallet,
+          }),
+        );
+        ids[person.name] = membership.id;
+        ids[`${person.name}.customer`] = customer.id;
+      }
+
+      const order = (status: OrderStatus, total: number) =>
+        orders.save(
+          orders.create({
+            branchId: seed.branchB.id,
+            customerId: ids['Ana.customer'],
+            status,
+            subtotal: total,
+            total,
+            tip: 20,
+          }),
+        );
+      const round = (orderId: string, number: number, status: RoundStatus) =>
+        rounds.save(rounds.create({ orderId, number, status }));
+      const item = (
+        orderId: string,
+        roundId: string,
+        productName: string,
+        quantity: number,
+      ) =>
+        items.save(
+          items.create({
+            orderId,
+            roundId,
+            productName,
+            quantity,
+            price: 10,
+            menuItemId: seed.foreignMenuItem.id,
+          }),
+        );
+
+      const first = await order(OrderStatus.PAID, 100);
+      const firstRound = await round(first.id, 1, RoundStatus.DELIVERED);
+      await item(first.id, firstRound.id, 'TACO', 3);
+      await item(first.id, firstRound.id, 'AGUA', 1);
+
+      const second = await order(OrderStatus.SETTLED, 200);
+      const delivered = await round(second.id, 1, RoundStatus.DELIVERED);
+      const cancelled = await round(second.id, 2, RoundStatus.CANCELLED);
+      await item(second.id, delivered.id, 'TACO', 1);
+      await item(second.id, delivered.id, 'TORTA', 1);
+      await item(second.id, cancelled.id, 'POSTRE', 5);
+
+      // Una cuenta cancelada no cuenta como gasto.
+      const lost = await order(OrderStatus.CANCELLED, 999);
+      const lostRound = await round(lost.id, 1, RoundStatus.NEW);
+      await item(lost.id, lostRound.id, 'POSTRE', 9);
+
+      await dataSource.getRepository(WalletMovement).save([
+        {
+          type: WalletMovementType.CASHBACK,
+          amount: 5,
+          balanceAfter: 5,
+          restaurantCustomerId: ids['Ana'],
+          orderId: first.id,
+        },
+        {
+          type: WalletMovementType.CASHBACK,
+          amount: 7.5,
+          balanceAfter: 12.5,
+          restaurantCustomerId: ids['Ana'],
+          orderId: second.id,
+        },
+        {
+          type: WalletMovementType.USE,
+          amount: -2.5,
+          balanceAfter: 10,
+          restaurantCustomerId: ids['Ana'],
+          orderId: second.id,
+        },
+      ]);
+    });
+
+    it('shows visits, spending, cashback, promotions, status and favorites', async () => {
+      const res = await list('?sort=name&order=asc');
+
+      expect(res.body.total).toBe(4);
+      expect(res.body.totals).toEqual({
+        customers: 4,
+        newThisMonth: 1,
+        recurring: 1,
+        promosAccepted: 1,
+      });
+      expect(res.body.exportEnabled).toBe(true);
+      expect(names(res.body)).toEqual(['Ana', 'Beto', 'Caro', 'Dani']);
+
+      const [ana, beto, caro, dani] = res.body.customers;
+      expect(ana).toMatchObject({
+        id: ids['Ana'],
+        phone: '+521••••••••01',
+        visits: 3,
+        spent: 300,
+        paidOrders: 2,
+        avgTicket: 150,
+        walletBalance: 10,
+        cashbackEarned: 12.5,
+        promos: 'accepted',
+        status: 'recurring',
+        favorites: ['TACO', 'AGUA', 'TORTA'],
+      });
+      expect(beto).toMatchObject({
+        status: 'new',
+        promos: 'pending',
+        spent: 0,
+        favorites: [],
+      });
+      expect(caro).toMatchObject({
+        status: 'inactive',
+        promos: 'unsubscribed',
+      });
+      expect(dani).toMatchObject({ status: 'occasional', promos: 'declined' });
+      expect(JSON.stringify(res.body)).not.toContain('+5216779900001');
+    });
+
+    it('filters, searches, sorts and pages on the server', async () => {
+      expect(names((await list('?status=inactive')).body)).toEqual(['Caro']);
+      expect(names((await list('?promos=accepted')).body)).toEqual(['Ana']);
+      expect(names((await list('?search=bet')).body)).toEqual(['Beto']);
+      expect(names((await list('?search=9900003')).body)).toEqual(['Caro']);
+      expect(names((await list('?search=%25')).body)).toEqual([]);
+      expect(names((await list('?sort=spent&order=desc')).body)[0]).toBe('Ana');
+      expect(names((await list('?sort=status&order=desc')).body)[0]).toBe(
+        'Caro',
+      );
+
+      const page = await list('?sort=name&order=asc&limit=2&offset=2');
+      expect(names(page.body)).toEqual(['Caro', 'Dani']);
+      expect(page.body.total).toBe(4);
+
+      const owner = await tokenFor(seed.clientB.email);
+      await http().get(`${url()}?status=vip`).set(auth(owner)).expect(400);
+      await http().get(`${url()}?sort=phone`).set(auth(owner)).expect(400);
+    });
+
+    it('shows a full phone only on request, and records who saw it', async () => {
+      const owner = await tokenFor(seed.clientB.email);
+      const other = await tokenFor(seed.clientA.email);
+      const phoneUrl = `${url()}/${ids['Dani']}/phone`;
+
+      const res = await http().post(phoneUrl).set(auth(owner)).expect(200);
+      expect(res.body).toEqual({ phone: '+5216779900004' });
+
+      await http().post(phoneUrl).set(auth(other)).expect(403);
+      await http().get(url()).set(auth(other)).expect(403);
+      // Un cliente de otro restaurante no se encuentra por este.
+      await http()
+        .post(
+          `/v1/restaurants/${seed.restaurantB.id}/customers/${randomUUID()}/phone`,
+        )
+        .set(auth(owner))
+        .expect(404);
+
+      const logs = await dataSource
+        .getRepository(AuditLog)
+        .findBy({ subjectId: ids['Dani'] });
+      expect(logs).toEqual([
+        expect.objectContaining({
+          userId: seed.clientB.id,
+          restaurantId: seed.restaurantB.id,
+          action: 'customer.phone_viewed',
+          recordCount: 1,
+        }),
+      ]);
+      expect(JSON.stringify(logs)).not.toContain('+521');
+    });
+
+    it('exports the full phone only of who accepted promotions', async () => {
+      const owner = await tokenFor(seed.clientB.email);
+      const exportCsv = (query = '') =>
+        http()
+          .get(`${url()}/export${query}`)
+          .set(auth(owner))
+          .buffer(true)
+          .parse((response, done) => {
+            const chunks: Buffer[] = [];
+            response.on('data', (chunk: Buffer) => chunks.push(chunk));
+            response.on('end', () => done(null, Buffer.concat(chunks)));
+          });
+
+      const res = await exportCsv('?sort=name&order=asc').expect(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      const lines = (res.body as Buffer).toString('utf8').split('\r\n');
+
+      expect(lines[0]).toContain('nombre,telefono,visitas');
+      expect(lines[1]).toMatch(/^Ana,\+5216779900001,3,/);
+      expect(lines[1]).toContain(',aceptó,');
+      expect(lines[1]).toContain('TACO | AGUA | TORTA');
+      expect(lines[3]).toMatch(/^Caro,\+521••••••••03,/);
+      expect(lines.filter(Boolean)).toHaveLength(5);
+
+      const accepted = await exportCsv('?promos=accepted').expect(200);
+      expect(
+        (accepted.body as Buffer)
+          .toString('utf8')
+          .split('\r\n')
+          .filter(Boolean),
+      ).toHaveLength(2);
+
+      const exports = await dataSource.getRepository(AuditLog).find({
+        where: {
+          restaurantId: seed.restaurantB.id,
+          action: 'customers.exported' as AuditLog['action'],
+        },
+        order: { createdAt: 'ASC' },
+      });
+      expect(exports.map((log) => log.recordCount)).toEqual([4, 1]);
+    });
+
+    it('does not export until it is switched on', async () => {
+      const owner = await tokenFor(seed.clientB.email);
+      const switchOff = jest
+        .spyOn(app.get(CustomerReportService), 'exportEnabled', 'get')
+        .mockReturnValue(false);
+
+      try {
+        await http().get(`${url()}/export`).set(auth(owner)).expect(403);
+        expect((await list()).body.exportEnabled).toBe(false);
+      } finally {
+        switchOff.mockRestore();
+      }
     });
   });
 });

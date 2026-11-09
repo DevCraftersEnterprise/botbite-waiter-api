@@ -61,6 +61,7 @@ Se validan al arrancar ([src/config/env.validation.ts](src/config/env.validation
 | `QR_BASE_URL` | No (`https://botbite.com.mx`) | Sitio que redirige `/m/<sucursal>` a la página QR del mesero |
 | `DOCS_USER`, `DOCS_PASSWORD` | No | Acceso a Swagger en `/docs`. En producción no se publica sin ellas |
 | `BOT_WEBHOOK_SECRET` | No | Firma de los avisos al servicio del mesero (mínimo 32 caracteres). Sin él no se envían |
+| `CUSTOMERS_EXPORT_ENABLED` | No (apagado en producción) | `true` permite exportar clientes a CSV. Se enciende cuando el aviso de privacidad de BotBite cubra la exportación |
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Sí | Conexión a PostgreSQL |
 | `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED`, `DB_SSL_CA` | No | SSL activo en producción y con verificación del certificado |
 | `JWT_SECRET`, `JWT_REFRESH_SECRET` | Sí | Mínimo 32 caracteres cada uno y distintos entre sí |
@@ -196,6 +197,16 @@ Las cuentas `user` las crea un admin (`POST /v1/users/register-user`).
 | `GET` | `/v1/menus/menu/:menuId/export` | El menú en el mismo formato (UTF-8 con BOM) |
 
 Columnas: `nombre, descripcion, categoria, precio, familia, recomendado, activo, foto_url`; `nombre`, `categoria` y `precio` son obligatorias. Acepta UTF-8 o Windows-1252, `,` o `;` y hasta 1,000 filas. El producto se busca por nombre sin distinguir acentos ni mayúsculas, y una celda vacía no cambia el valor. Las fotos (solo https) las descarga Cloudinary; si una falla, el producto se guarda sin ella.
+
+**Clientes** (dueño o admin; el personal no), por restaurante:
+
+| Método | Ruta | Uso |
+| --- | --- | --- |
+| `GET` | `/v1/restaurants/:restaurantId/customers` | Visitas, alta y última visita, gasto y ticket de las cuentas pagadas (sin propina), monedero y cashback ganado, promociones, estado y los 3 favoritos. Filtra por `status` y `promos`, busca por nombre o teléfono, ordena por cualquier columna y pagina. Trae los totales de arriba y el teléfono parcialmente oculto |
+| `POST` | `/v1/restaurants/:restaurantId/customers/:id/phone` | El teléfono completo de un cliente |
+| `GET` | `/v1/restaurants/:restaurantId/customers/export` | CSV con los mismos filtros. El teléfono completo solo de quien aceptó promociones; apagado si `CUSTOMERS_EXPORT_ENABLED` no lo permite |
+
+Estado: nuevo (1 visita), ocasional (2), recurrente (3 o más) e inactivo (más de 30 días sin venir), que manda sobre los otros. Ver un teléfono y exportar quedan en `audit_logs`: quién, cuándo, qué, en qué restaurante y cuántos registros, sin teléfonos ni nombres.
 
 **WebSocket:** la conexión requiere el access token.
 
