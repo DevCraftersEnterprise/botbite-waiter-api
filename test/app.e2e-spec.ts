@@ -200,10 +200,15 @@ describe('BotBite API (e2e)', () => {
     it('a client can see its own branches but not another restaurant', async () => {
       const { access_token } = await login(seed.clientB.email);
 
-      await http()
+      const own = await http()
         .get(`/v1/branches/restaurant/${seed.restaurantB.id}`)
         .set(auth(access_token))
         .expect(200);
+      // El panel marca la verificación de ubicación y fija el prefijo del slug.
+      expect(own.body.branches[0]).toMatchObject({
+        verifyLocation: false,
+        restaurant: { slug: seed.restaurantB.slug },
+      });
 
       await http()
         .get(`/v1/branches/restaurant/${seed.restaurantA.id}`)
