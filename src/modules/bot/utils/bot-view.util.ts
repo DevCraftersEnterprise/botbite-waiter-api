@@ -2,7 +2,10 @@ import {
   BotBranchConfig,
   BotCatalogItem,
 } from '@/modules/bot/dto/bot-branch.response';
-import { Branch } from '@/modules/branches/entities/branch.entity';
+import {
+  Branch,
+  DEFAULT_BRANCH_FEATURES,
+} from '@/modules/branches/entities/branch.entity';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 
 const toNumberOrNull = (value: number | string | null): number | null =>
@@ -29,7 +32,8 @@ export const toBotBranchConfig = (branch: Branch): BotBranchConfig => ({
   timezone: branch.timezone,
   dailyCloseTime: branch.dailyCloseTime.slice(0, 5),
   surveyUrl: branch.surveyUrl,
-  features: branch.features,
+  // Una función nueva vale su valor por defecto hasta que se guarde.
+  features: { ...DEFAULT_BRANCH_FEATURES, ...branch.features },
 });
 
 const byMenuPosition = (a: MenuItem, b: MenuItem): number =>

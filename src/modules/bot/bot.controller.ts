@@ -283,11 +283,17 @@ export class BotController {
   }
 
   @Post('notifications')
-  @ApiOperation({ summary: 'Aviso para caja que no sale de una cuenta' })
+  @ApiOperation({
+    summary: 'Aviso para caja que no sale de una cuenta',
+    description:
+      'Con `eventId`, reenviar el mismo aviso no lo duplica en caja: responde 200 con `created: false`.',
+  })
   @ApiCreatedResponse({ description: 'Aviso creado' })
+  @ApiOkResponse({ description: 'Era un reintento con el mismo `eventId`' })
   async createNotification(
     @BotBranchId() branchId: string,
     @Body() dto: CreateBotNotificationDto,
+    @Res({ passthrough: true }) response: Response,
   ) {
     let orderId: string | null = null;
 
@@ -300,13 +306,17 @@ export class BotController {
       orderId = order.id;
     }
 
-    const { id } = await this.notificationsService.create({
-      branchId,
-      type: dto.type,
-      message: dto.message,
-      orderId,
-    });
+    const { notification, created } =
+      await this.notificationsService.createOnce({
+        branchId,
+        type: dto.type,
+        message: dto.message,
+        orderId,
+        eventId: dto.eventId ?? null,
+      });
 
-    return { id };
+    response.status(created ? HttpStatus.CREATED : HttpStatus.OK);
+
+    return { id: notification.id, created };
   }
 }

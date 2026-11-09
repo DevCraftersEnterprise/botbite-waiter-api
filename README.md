@@ -125,14 +125,14 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 
 **API del bot:** el mesero llama a `/v1/bot/*` con el header `X-BotBite-Key`. El límite es por llave (`THROTTLE_BOT_LIMIT`, 1000 por minuto), no por IP, porque el servicio del mesero atiende a todos los negocios desde la misma IP.
 - Cada llave pertenece a una sucursal, y la sucursal siempre sale de la llave. Solo se guarda su hash y se muestra una sola vez.
-- `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si el mesero envía `If-None-Match`, contesta `304` cuando nada cambió.
+- `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si el mesero envía `If-None-Match`, contesta `304` cuando nada cambió. Del restaurante trae también `logoUrl` y `privacyUrl` (null si no hay), y en `features` va `languages`: apagado, el bot atiende solo en español.
 - `POST /v1/bot/orders` abre la cuenta con su primera ronda y `POST /v1/bot/orders/:code/rounds` agrega comandas. Reenviar el mismo `code` o `number` no duplica nada. La API pone los precios con el menú vigente.
 - `PATCH /v1/bot/orders/:code` avanza la cuenta. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina.
 - `POST /v1/bot/payments` registra un pago aprobado: cierra la cuenta y abona el cashback. Reenviar el mismo `providerPaymentId` no lo procesa dos veces.
 - `POST /v1/bot/invoices` registra una factura que FacturAPI ya timbró. Reenviar el mismo `providerInvoiceId` no la registra dos veces.
 - `POST /v1/bot/daily-close` cierra las cuentas de WhatsApp que nadie pidió.
 - `POST /v1/bot/customers/lookup` y `PATCH /v1/bot/customers` leen y guardan al comensal. El teléfono va en el cuerpo para que no quede en los logs. Los datos fiscales solo vienen con `includeTaxProfile: true`.
-- `POST /v1/bot/notifications` manda avisos sueltos a caja.
+- `POST /v1/bot/notifications` manda avisos sueltos a caja. Con `eventId` (un UUID que el bot repite en cada reintento) no se duplican: el reintento responde 200 con `created: false`.
 - Las rutas están documentadas en Swagger, en `/docs`.
 
 **Cuentas y comandas:** `orders` es la cuenta de una mesa y `order_rounds` sus comandas. Estados de la cuenta: `open` → `bill_requested` → `payment_link` o `with_waiter` → `paid` o `settled`. También `auto_closed` y `cancelled`. Estados de la comanda: `new` → `preparing` → `delivered`, o `cancelled`. El personal mueve las comandas, cobra las cuentas y abre sus propias cuentas desde el panel; las rondas de una cuenta de WhatsApp solo las agrega el bot.
@@ -158,6 +158,9 @@ Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<c
 | `GET`, `PATCH` | `/v1/branches/:restaurantId/:branchId/bot-config` | Dueño o admin. Slug, `phone_number_id`, URL del mesero y funciones contratadas: solo admin |
 | `GET`, `POST` | `/v1/branches/:restaurantId/:branchId/bot-keys` | Solo admin |
 | `DELETE` | `/v1/branches/:restaurantId/:branchId/bot-keys/:keyId` | Solo admin |
+| `PATCH`, `DELETE` | `/v1/restaurants/:restaurantId/logo` | Dueño o admin. Sube (PNG, JPG o WebP; Cloudinary lo deja cuadrado) o quita el logo |
+
+El aviso de privacidad del restaurante es `privacyUrl` en `PATCH /v1/restaurants/:restaurantId` (https; `null` lo quita). El bot muestra siempre el de BotBite y agrega este si existe.
 
 **Slugs:** el del restaurante es único en la plataforma y sale de su nombre (`punto-de-union`). El de la sucursal sigue el estándar `<restaurante>-<sucursal>` (`punto-de-union-cocorit`): se genera al crearla y, si un admin lo cambia, debe empezar con el del restaurante. Cambiar el slug de un restaurante no renombra sus sucursales, porque el QR impreso y el webhook dependen de ellos.
 

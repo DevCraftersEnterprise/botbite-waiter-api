@@ -65,6 +65,8 @@ export class BotConfigService {
         slug: restaurant.slug,
         name: restaurant.name,
         walletPct: Number(restaurant.walletPct),
+        logoUrl: restaurant.logoUrl ?? null,
+        privacyUrl: restaurant.privacyUrl ?? null,
       },
       branch: toBotBranchConfig(branch),
       menuPdfUrl: menus.find((menu) => menu.pdfLink)?.pdfLink ?? null,

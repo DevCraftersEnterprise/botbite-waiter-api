@@ -62,6 +62,10 @@ export class BranchFeaturesDto {
   @IsOptional()
   @IsBoolean()
   survey?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  languages?: boolean;
 }
 
 /** Lo que cambia la conexión con el servicio del mesero o lo contratado: solo SUPER/ADMIN. */

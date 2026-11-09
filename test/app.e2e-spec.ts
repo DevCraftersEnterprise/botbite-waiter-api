@@ -21,6 +21,7 @@ import { Customer } from '@/modules/customers/entities/customer.entity';
 import { RestaurantCustomer } from '@/modules/customers/entities/restaurant-customer.entity';
 import { WalletMovement } from '@/modules/customers/entities/wallet-movement.entity';
 import { MenuPhotoService } from '@/modules/menus/csv/menu-photo.service';
+import { RestaurantLogoStorage } from '@/modules/restaurants/restaurant-logo.storage';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
@@ -36,6 +37,14 @@ const PASSWORD = 'Sup3r-secret!';
 const ASSISTANT_PHONE = '+5215511110001';
 const RECEPTION_PHONE = '+5215511110002';
 const CUSTOMER_PHONE = '+5215522220001';
+
+/** El logo no sale a Cloudinary. */
+const fakeLogoStorage = {
+  upload: (_image: Buffer, restaurantId: string) =>
+    Promise.resolve(
+      `https://res.cloudinary.com/e2e/image/upload/restaurants/${restaurantId}/logo.png`,
+    ),
+};
 
 /** Las fotos del CSV no salen a Cloudinary; "rota" simula una que no se copia. */
 const fakeMenuPhotos = {
@@ -97,6 +106,8 @@ describe('BotBite API (e2e)', () => {
     })
       .overrideProvider(MenuPhotoService)
       .useValue(fakeMenuPhotos)
+      .overrideProvider(RestaurantLogoStorage)
+      .useValue(fakeLogoStorage)
       .compile();
 
     app = moduleRef.createNestApplication<NestExpressApplication>({
@@ -882,6 +893,89 @@ describe('BotBite API (e2e)', () => {
         .expect(200);
     });
 
+    it('includes the logo, the privacy notice and the languages switch', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const admin = await tokenFor(seed.superUser.email);
+      const other = await tokenFor(seed.clientB.email);
+      const restaurantUrl = `/v1/restaurants/${seed.restaurantA.id}`;
+      const configUrl = `/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/bot-config`;
+      const png = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0,
+      ]);
+      const uploadLogo = (token: string, file: Buffer) =>
+        http()
+          .patch(`${restaurantUrl}/logo`)
+          .set(auth(token))
+          .attach('file', file, {
+            filename: 'logo.png',
+            contentType: 'image/png',
+          });
+
+      let res = await asBot(secret).expect(200);
+      expect(res.body.restaurant).toMatchObject({
+        logoUrl: null,
+        privacyUrl: null,
+      });
+      // Las sucursales que ya existían quedan con la pregunta del idioma.
+      expect(res.body.branch.features.languages).toBe(true);
+
+      await http()
+        .patch(restaurantUrl)
+        .set(auth(owner))
+        .send({ privacyUrl: 'http://tacos.test/privacidad' })
+        .expect(400);
+      await http()
+        .patch(restaurantUrl)
+        .set(auth(owner))
+        .send({ privacyUrl: 'https://tacos.test/privacidad' })
+        .expect(200);
+
+      const logo = await uploadLogo(owner, png).expect(200);
+      expect(logo.body.restaurant.logoUrl).toBe(
+        `https://res.cloudinary.com/e2e/image/upload/restaurants/${seed.restaurantA.id}/logo.png`,
+      );
+      await uploadLogo(other, png).expect(403);
+      await uploadLogo(owner, Buffer.from('no es una imagen')).expect(400);
+
+      // Como las demás funciones contratadas, solo un admin la cambia.
+      await http()
+        .patch(configUrl)
+        .set(auth(owner))
+        .send({ features: { languages: false } })
+        .expect(403);
+      await http()
+        .patch(configUrl)
+        .set(auth(admin))
+        .send({ features: { languages: false } })
+        .expect(200);
+
+      res = await asBot(secret).expect(200);
+      expect(res.body.restaurant).toMatchObject({
+        logoUrl: expect.stringContaining('/logo.png'),
+        privacyUrl: 'https://tacos.test/privacidad',
+      });
+      expect(res.body.branch.features.languages).toBe(false);
+
+      // Queda como estaba para las demás pruebas.
+      await http().delete(`${restaurantUrl}/logo`).set(auth(owner)).expect(200);
+      await http()
+        .patch(restaurantUrl)
+        .set(auth(owner))
+        .send({ privacyUrl: null })
+        .expect(200);
+      await http()
+        .patch(configUrl)
+        .set(auth(admin))
+        .send({ features: { languages: true } })
+        .expect(200);
+
+      res = await asBot(secret).expect(200);
+      expect(res.body.restaurant).toMatchObject({
+        logoUrl: null,
+        privacyUrl: null,
+      });
+    });
+
     it('answers 304 until something changes', async () => {
       const first = await asBot(secret).expect(200);
       const etag = first.headers.etag;
@@ -1497,6 +1591,43 @@ describe('BotBite API (e2e)', () => {
         .post(url)
         .set(bot())
         .send({ type: 'order', message: 'x' })
+        .expect(400);
+    });
+
+    it('does not repeat an alert sent again with the same eventId', async () => {
+      const url = '/v1/bot/notifications';
+      const notifications = dataSource.getRepository(CashierNotification);
+      const body = {
+        type: 'alert',
+        message: 'La factura no se pudo timbrar',
+        eventId: randomUUID(),
+      };
+
+      const first = await http().post(url).set(bot()).send(body).expect(201);
+      expect(first.body).toEqual({ id: expect.any(String), created: true });
+
+      const again = await http().post(url).set(bot()).send(body).expect(200);
+      expect(again.body).toEqual({ id: first.body.id, created: false });
+
+      // Reintentos a la vez de un aviso nuevo: solo uno se guarda.
+      const concurrent = { ...body, eventId: randomUUID() };
+      const responses = await Promise.all(
+        [1, 2, 3].map(() => http().post(url).set(bot()).send(concurrent)),
+      );
+      expect(responses.map((r) => r.status).sort()).toEqual([200, 200, 201]);
+      expect(
+        new Set(responses.map((r) => (r.body as { id: string }).id)).size,
+      ).toBe(1);
+
+      expect(await notifications.countBy({ eventId: body.eventId })).toBe(1);
+      expect(await notifications.countBy({ eventId: concurrent.eventId })).toBe(
+        1,
+      );
+
+      await http()
+        .post(url)
+        .set(bot())
+        .send({ ...body, eventId: 'no-es-un-uuid' })
         .expect(400);
     });
 

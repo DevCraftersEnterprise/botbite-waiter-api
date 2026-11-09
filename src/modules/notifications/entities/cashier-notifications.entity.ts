@@ -10,6 +10,10 @@ import { Order } from '@/modules/orders/entities/order.entity';
 @Index('IDX_cashier_notifications_branch_unread', ['branchId', 'createdAt'], {
   where: '"readAt" IS NULL',
 })
+@Index('UQ_cashier_notifications_branch_event', ['branchId', 'eventId'], {
+  unique: true,
+  where: '"eventId" IS NOT NULL',
+})
 export class CashierNotification extends BaseEntity {
   @Column({
     type: 'enum',
@@ -35,6 +39,10 @@ export class CashierNotification extends BaseEntity {
 
   @Column({ type: 'timestamptz', nullable: true })
   readAt: Date | null;
+
+  /** Id del aviso en el bot: un reintento no lo duplica. */
+  @Column({ type: 'uuid', nullable: true })
+  eventId: string | null;
 
   @ManyToOne(() => Branch, { nullable: true })
   @JoinColumn({ name: 'branchId' })

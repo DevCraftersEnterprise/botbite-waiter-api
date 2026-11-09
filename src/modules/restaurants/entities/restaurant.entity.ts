@@ -21,8 +21,13 @@ export class Restaurant extends BaseEntity {
   @Column({ type: 'varchar', length: 60 })
   slug: string;
 
-  @Column({ nullable: true })
-  logoUrl: string;
+  /** Cuadrado, en Cloudinary; lo sube el dueño desde el panel. */
+  @Column({ type: 'varchar', nullable: true })
+  logoUrl: string | null;
+
+  /** Aviso de privacidad propio; el de BotBite se muestra siempre. */
+  @Column({ type: 'varchar', length: 500, nullable: true })
+  privacyUrl: string | null;
 
   /** Porcentaje de cashback del monedero. */
   @Column({ type: 'numeric', precision: 5, scale: 2, default: 5 })

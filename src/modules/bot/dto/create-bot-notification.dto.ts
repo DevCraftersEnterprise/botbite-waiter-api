@@ -4,6 +4,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
 } from 'class-validator';
 import { NotificationType } from '@/modules/notifications/enums/notification-type.enum';
@@ -29,4 +30,13 @@ export class CreateBotNotificationDto {
   @IsString()
   @MaxLength(20)
   orderCode?: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Lo genera el bot una sola vez y lo repite en cada reintento: si ya llegó, responde 200 con `created: false` y no se duplica en caja',
+  })
+  @IsOptional()
+  @IsUUID()
+  eventId?: string;
 }

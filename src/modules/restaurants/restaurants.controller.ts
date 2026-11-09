@@ -8,9 +8,15 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { Lang } from '@/common/decorators/lang.decorator';
+import {
+  assertFileContent,
+  uploadOptions,
+} from '@/common/uploads/upload-options';
 import { AccessControlService } from '@/core/access/access-control.service';
 import { CatalogChangedInterceptor } from '@/modules/bot-events/catalog-changed.interceptor';
 import { Auth } from '@/core/auth/decorators/auth.decorator';
@@ -59,6 +65,39 @@ export class RestaurantsController {
       user,
       lang,
     );
+  }
+
+  /** Logo del restaurante: el bot lo muestra en la página del QR. */
+  @Patch(':restaurantId/logo')
+  @UseInterceptors(
+    FileInterceptor('file', uploadOptions('image')),
+    CatalogChangedInterceptor,
+  )
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  async uploadLogo(
+    @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: User,
+    @Lang() lang: string,
+  ) {
+    await this.accessControl.assertRestaurantAccess(user, restaurantId);
+    return this.restaurantsService.updateLogo(
+      restaurantId,
+      assertFileContent(file, 'image').buffer,
+      lang,
+    );
+  }
+
+  @Delete(':restaurantId/logo')
+  @UseInterceptors(CatalogChangedInterceptor)
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  async removeLogo(
+    @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
+    @CurrentUser() user: User,
+    @Lang() lang: string,
+  ) {
+    await this.accessControl.assertRestaurantAccess(user, restaurantId);
+    return this.restaurantsService.updateLogo(restaurantId, null, lang);
   }
 
   @Patch('activate/:restaurantId')
