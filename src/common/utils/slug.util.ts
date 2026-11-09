@@ -11,6 +11,8 @@ export const slugify = (text: string, fallback: string): string => {
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
+    // El apóstrofo no separa palabras: "Sushilito's" → "sushilitos".
+    .replace(/['’‘`´]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, MAX_BASE_LENGTH)

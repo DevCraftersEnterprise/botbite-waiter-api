@@ -9,9 +9,11 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ApiExcludeController } from '@nestjs/swagger';
 import { AccessControlService } from '@/core/access/access-control.service';
+import { CatalogChangedInterceptor } from '@/modules/bot-events/catalog-changed.interceptor';
 import { Auth } from '@/core/auth/decorators/auth.decorator';
 import { CurrentUser } from '@/core/auth/decorators/current-user.decorator';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
@@ -47,6 +49,7 @@ export class BotAdminController {
   }
 
   @Patch('bot-config')
+  @UseInterceptors(CatalogChangedInterceptor)
   @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
   async updateConfig(
     @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
