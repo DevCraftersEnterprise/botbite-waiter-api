@@ -61,6 +61,7 @@ Se validan al arrancar ([src/config/env.validation.ts](src/config/env.validation
 | `QR_BASE_URL` | No (`https://botbite.com.mx`) | Sitio que redirige `/m/<sucursal>` a la página QR del mesero |
 | `DOCS_USER`, `DOCS_PASSWORD` | No | Acceso a Swagger en `/docs`. En producción no se publica sin ellas |
 | `BOT_WEBHOOK_SECRET` | No | Firma de los avisos al servicio del mesero (mínimo 32 caracteres). Sin él no se envían |
+| `CUSTOMERS_EXPORT_ENABLED` | No (apagado en producción) | `true` permite exportar clientes a CSV. Se enciende cuando el aviso de privacidad de BotBite cubra la exportación |
 | `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Sí | Conexión a PostgreSQL |
 | `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED`, `DB_SSL_CA` | No | SSL activo en producción y con verificación del certificado |
 | `JWT_SECRET`, `JWT_REFRESH_SECRET` | Sí | Mínimo 32 caracteres cada uno y distintos entre sí |
@@ -125,14 +126,14 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 
 **API del bot:** el mesero llama a `/v1/bot/*` con el header `X-BotBite-Key`. El límite es por llave (`THROTTLE_BOT_LIMIT`, 1000 por minuto), no por IP, porque el servicio del mesero atiende a todos los negocios desde la misma IP.
 - Cada llave pertenece a una sucursal, y la sucursal siempre sale de la llave. Solo se guarda su hash y se muestra una sola vez.
-- `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si el mesero envía `If-None-Match`, contesta `304` cuando nada cambió.
+- `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si el mesero envía `If-None-Match`, contesta `304` cuando nada cambió. Del restaurante trae también `logoUrl` y `privacyUrl` (null si no hay), y en `features` va `languages`: apagado, el bot atiende solo en español.
 - `POST /v1/bot/orders` abre la cuenta con su primera ronda y `POST /v1/bot/orders/:code/rounds` agrega comandas. Reenviar el mismo `code` o `number` no duplica nada. La API pone los precios con el menú vigente.
 - `PATCH /v1/bot/orders/:code` avanza la cuenta. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina.
 - `POST /v1/bot/payments` registra un pago aprobado: cierra la cuenta y abona el cashback. Reenviar el mismo `providerPaymentId` no lo procesa dos veces.
 - `POST /v1/bot/invoices` registra una factura que FacturAPI ya timbró. Reenviar el mismo `providerInvoiceId` no la registra dos veces.
 - `POST /v1/bot/daily-close` cierra las cuentas de WhatsApp que nadie pidió.
 - `POST /v1/bot/customers/lookup` y `PATCH /v1/bot/customers` leen y guardan al comensal. El teléfono va en el cuerpo para que no quede en los logs. Los datos fiscales solo vienen con `includeTaxProfile: true`.
-- `POST /v1/bot/notifications` manda avisos sueltos a caja.
+- `POST /v1/bot/notifications` manda avisos sueltos a caja. Con `eventId` (un UUID que el bot repite en cada reintento) no se duplican: el reintento responde 200 con `created: false`.
 - Las rutas están documentadas en Swagger, en `/docs`.
 
 **Cuentas y comandas:** `orders` es la cuenta de una mesa y `order_rounds` sus comandas. Estados de la cuenta: `open` → `bill_requested` → `payment_link` o `with_waiter` → `paid` o `settled`. También `auto_closed` y `cancelled`. Estados de la comanda: `new` → `preparing` → `delivered`, o `cancelled`. El personal mueve las comandas, cobra las cuentas y abre sus propias cuentas desde el panel; las rondas de una cuenta de WhatsApp solo las agrega el bot.
@@ -147,7 +148,7 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 
 **Cobros en el panel:** `GET /v1/orders/billing?branchId=<id>&date=YYYY-MM-DD` devuelve los pagos en línea y las facturas de un día en la zona horaria de la sucursal; sin `date`, los de hoy. La ven el dueño, los admins y el personal de la sucursal.
 
-**Avisos al mesero:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, restaurantSlug, branchSlug, occurredAt, data }`. Si `botBaseUrl` trae query (por ejemplo `?negocio=punto-de-union`), se conserva: `https://mesero/portal-evento?negocio=punto-de-union`. Los tipos son `round.status_changed`, `order.closed` y `catalog.changed`. Son de mejor esfuerzo: se reintentan y, si n8n no responde, solo se registra.
+**Avisos al mesero:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, restaurantSlug, branchSlug, occurredAt, data }`. Si `botBaseUrl` trae query (por ejemplo `?negocio=punto-de-union`), se conserva: `https://mesero/portal-evento?negocio=punto-de-union`. Los tipos son `round.status_changed`, `order.closed` y `catalog.changed`. Este último sale al cambiar productos, menús o categorías y al guardar el Mesero digital, la sucursal o el restaurante; no trae datos, así que el mesero vuelve a leer `GET /v1/bot/branch`. Son de mejor esfuerzo: se reintentan y, si el mesero no responde, solo se registra.
 
 Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<cuerpo>` con `BOT_WEBHOOK_SECRET` y lo compara con `X-BotBite-Signature: sha256=<hex>`.
 
@@ -158,6 +159,9 @@ Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<c
 | `GET`, `PATCH` | `/v1/branches/:restaurantId/:branchId/bot-config` | Dueño o admin. Slug, `phone_number_id`, URL del mesero y funciones contratadas: solo admin |
 | `GET`, `POST` | `/v1/branches/:restaurantId/:branchId/bot-keys` | Solo admin |
 | `DELETE` | `/v1/branches/:restaurantId/:branchId/bot-keys/:keyId` | Solo admin |
+| `PATCH`, `DELETE` | `/v1/restaurants/:restaurantId/logo` | Dueño o admin. Sube (PNG, JPG o WebP; Cloudinary lo deja cuadrado) o quita el logo |
+
+El aviso de privacidad del restaurante es `privacyUrl` en `PATCH /v1/restaurants/:restaurantId` (https; `null` lo quita). El bot muestra siempre el de BotBite y agrega este si existe.
 
 **Slugs:** el del restaurante es único en la plataforma y sale de su nombre (`punto-de-union`). El de la sucursal sigue el estándar `<restaurante>-<sucursal>` (`punto-de-union-cocorit`): se genera al crearla y, si un admin lo cambia, debe empezar con el del restaurante. Cambiar el slug de un restaurante no renombra sus sucursales, porque el QR impreso y el webhook dependen de ellos.
 
@@ -183,6 +187,26 @@ El control de acceso está centralizado en [`AccessControlService`](src/core/acc
 | `DELETE` | `/v1/branches/:restaurantId/:branchId/staff/:userId` | Quitar |
 
 Las cuentas `user` las crea un admin (`POST /v1/users/register-user`).
+
+**Menú por CSV** (dueño o admin), un menú de sucursal por archivo:
+
+| Método | Ruta | Uso |
+| --- | --- | --- |
+| `POST` | `/v1/menus/menu/:menuId/import/preview` | Qué se crearía y actualizaría, y los errores por fila y columna. No guarda nada |
+| `POST` | `/v1/menus/menu/:menuId/import` | Guarda todo en una transacción; con un error, nada. Luego copia las fotos y avisa al mesero una vez |
+| `GET` | `/v1/menus/menu/:menuId/export` | El menú en el mismo formato (UTF-8 con BOM) |
+
+Columnas: `nombre, descripcion, categoria, precio, familia, recomendado, activo, foto_url`; `nombre`, `categoria` y `precio` son obligatorias. Acepta UTF-8 o Windows-1252, `,` o `;` y hasta 1,000 filas. El producto se busca por nombre sin distinguir acentos ni mayúsculas, y una celda vacía no cambia el valor. Las fotos (solo https) las descarga Cloudinary; si una falla, el producto se guarda sin ella.
+
+**Clientes** (dueño o admin; el personal no), por restaurante:
+
+| Método | Ruta | Uso |
+| --- | --- | --- |
+| `GET` | `/v1/restaurants/:restaurantId/customers` | Visitas, alta y última visita, gasto y ticket de las cuentas pagadas (sin propina), monedero y cashback ganado, promociones, estado y los 3 favoritos. Filtra por `status` y `promos`, busca por nombre o teléfono, ordena por cualquier columna y pagina. Trae los totales de arriba y el teléfono parcialmente oculto |
+| `POST` | `/v1/restaurants/:restaurantId/customers/:id/phone` | El teléfono completo de un cliente |
+| `GET` | `/v1/restaurants/:restaurantId/customers/export` | CSV con los mismos filtros. El teléfono completo solo de quien aceptó promociones; apagado si `CUSTOMERS_EXPORT_ENABLED` no lo permite |
+
+Estado: nuevo (1 visita), ocasional (2), recurrente (3 o más) e inactivo (más de 30 días sin venir), que manda sobre los otros. Ver un teléfono y exportar quedan en `audit_logs`: quién, cuándo, qué, en qué restaurante y cuántos registros, sin teléfonos ni nombres.
 
 **WebSocket:** la conexión requiere el access token.
 

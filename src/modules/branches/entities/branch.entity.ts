@@ -21,6 +21,8 @@ export interface BranchFeatures {
   invoicing: boolean;
   promotions: boolean;
   survey: boolean;
+  /** Pregunta el idioma; apagado, el bot atiende solo en español. */
+  languages: boolean;
 }
 
 export const DEFAULT_BRANCH_FEATURES: BranchFeatures = {
@@ -32,6 +34,7 @@ export const DEFAULT_BRANCH_FEATURES: BranchFeatures = {
   invoicing: true,
   promotions: true,
   survey: true,
+  languages: true,
 };
 
 @Entity('branches')

@@ -50,6 +50,7 @@ export const findAllRestaurantsByClientUseCase = async (
       slug: true,
       walletPct: true,
       logoUrl: true,
+      privacyUrl: true,
       isActive: true,
       createdAt: true,
       updatedAt: true,

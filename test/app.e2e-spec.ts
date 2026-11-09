@@ -7,22 +7,36 @@ import { AddressInfo } from 'net';
 import { io, Socket } from 'socket.io-client';
 import request from 'supertest';
 import { DataSource, Like } from 'typeorm';
-import { signBotEvent } from '@/modules/bot-events/bot-events.service';
+import {
+  BotEventsService,
+  signBotEvent,
+} from '@/modules/bot-events/bot-events.service';
 import { AppModule } from '@/app.module';
 import { configureApp } from '@/app.setup';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { Category } from '@/modules/categories/entities/category.entity';
+import { AuditLog } from '@/modules/audit/entities/audit-log.entity';
 import { CustomerTaxProfile } from '@/modules/customers/entities/customer-tax-profile.entity';
 import { Customer } from '@/modules/customers/entities/customer.entity';
 import { RestaurantCustomer } from '@/modules/customers/entities/restaurant-customer.entity';
 import { WalletMovement } from '@/modules/customers/entities/wallet-movement.entity';
+import {
+  PromosStatus,
+  WalletMovementType,
+} from '@/modules/customers/enums/customer.enums';
+import { CustomerReportService } from '@/modules/customers/services/customer-report.service';
+import { MenuPhotoService } from '@/modules/menus/csv/menu-photo.service';
+import { RestaurantLogoStorage } from '@/modules/restaurants/restaurant-logo.storage';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
 import { NotificationType } from '@/modules/notifications/enums/notification-type.enum';
 import { Invoice } from '@/modules/orders/entities/invoice.entity';
+import { OrderItem } from '@/modules/orders/entities/order-item.entity';
+import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
+import { OrderStatus, RoundStatus } from '@/modules/orders/enums/order.enums';
 import { Payment } from '@/modules/orders/entities/payment.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
@@ -32,6 +46,25 @@ const PASSWORD = 'Sup3r-secret!';
 const ASSISTANT_PHONE = '+5215511110001';
 const RECEPTION_PHONE = '+5215511110002';
 const CUSTOMER_PHONE = '+5215522220001';
+
+/** El logo no sale a Cloudinary. */
+const fakeLogoStorage = {
+  upload: (_image: Buffer, restaurantId: string) =>
+    Promise.resolve(
+      `https://res.cloudinary.com/e2e/image/upload/restaurants/${restaurantId}/logo.png`,
+    ),
+};
+
+/** Las fotos del CSV no salen a Cloudinary; "rota" simula una que no se copia. */
+const fakeMenuPhotos = {
+  isOwnUrl: (url: string) => url.startsWith('https://res.cloudinary.com/e2e/'),
+  copy: (url: string, restaurantId: string, productId: string) =>
+    url.includes('rota')
+      ? Promise.reject(new Error('Resource not found'))
+      : Promise.resolve(
+          `https://res.cloudinary.com/e2e/image/upload/products/${restaurantId}/product-${productId}.jpg`,
+        ),
+};
 
 interface Seed {
   superUser: User;
@@ -79,7 +112,12 @@ describe('BotBite API (e2e)', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(MenuPhotoService)
+      .useValue(fakeMenuPhotos)
+      .overrideProvider(RestaurantLogoStorage)
+      .useValue(fakeLogoStorage)
+      .compile();
 
     app = moduleRef.createNestApplication<NestExpressApplication>({
       logger: ['error'],
@@ -182,10 +220,15 @@ describe('BotBite API (e2e)', () => {
     it('a client can see its own branches but not another restaurant', async () => {
       const { access_token } = await login(seed.clientB.email);
 
-      await http()
+      const own = await http()
         .get(`/v1/branches/restaurant/${seed.restaurantB.id}`)
         .set(auth(access_token))
         .expect(200);
+      // El panel marca la verificación de ubicación y fija el prefijo del slug.
+      expect(own.body.branches[0]).toMatchObject({
+        verifyLocation: false,
+        restaurant: { slug: seed.restaurantB.slug },
+      });
 
       await http()
         .get(`/v1/branches/restaurant/${seed.restaurantA.id}`)
@@ -507,6 +550,17 @@ describe('BotBite API (e2e)', () => {
       expect(res.body.restaurant.slug).toBe('punto-de-union');
     });
 
+    it('an apostrophe does not split the slug', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .post('/v1/restaurants')
+        .set(auth(owner))
+        .send({ name: "Sushilito's" })
+        .expect(201);
+
+      expect(res.body.restaurant.slug).toBe('sushilitos');
+    });
+
     it('the owner sets the wallet percentage, only an admin the slug', async () => {
       const owner = await tokenFor(seed.clientA.email);
       const admin = await tokenFor(seed.superUser.email);
@@ -566,6 +620,73 @@ describe('BotBite API (e2e)', () => {
         .set(auth(owner))
         .send({ latitude: null })
         .expect(400);
+    });
+
+    it('rounds the coordinates as Google Maps copies them', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ latitude: 27.5350381, longitude: '-109.9540312' })
+        .expect(200);
+
+      expect(res.body.config).toMatchObject({
+        latitude: 27.535038,
+        longitude: -109.954031,
+      });
+
+      await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ latitude: 'norte' })
+        .expect(400);
+    });
+
+    it('notifies the bot when the configuration, the branch or the restaurant is saved', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const events = jest.spyOn(app.get(BotEventsService), 'catalogChanged');
+
+      await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ geofenceMeters: 150 })
+        .expect(200);
+      expect(events).toHaveBeenLastCalledWith(
+        expect.objectContaining({ branchId: seed.branchA.id }),
+      );
+
+      await http()
+        .patch(
+          `/v1/branches/restaurant/${seed.restaurantA.id}/${seed.branchA.id}`,
+        )
+        .set(auth(owner))
+        .send({ address: 'Calle 1 #10' })
+        .expect(200);
+      expect(events).toHaveBeenLastCalledWith(
+        expect.objectContaining({ branchId: seed.branchA.id }),
+      );
+
+      await http()
+        .patch(`/v1/restaurants/${seed.restaurantA.id}`)
+        .set(auth(owner))
+        .send({ name: 'Tacos A' })
+        .expect(200);
+      expect(events).toHaveBeenLastCalledWith({
+        branchId: undefined,
+        menuId: undefined,
+        restaurantId: seed.restaurantA.id,
+        categoryId: undefined,
+      });
+
+      // Un cambio que falla no avisa.
+      const calls = events.mock.calls.length;
+      await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ geofenceMeters: 1 })
+        .expect(400);
+      expect(events).toHaveBeenCalledTimes(calls);
+      events.mockRestore();
     });
 
     it('only an admin changes what connects to n8n or what was contracted', async () => {
@@ -779,6 +900,89 @@ describe('BotBite API (e2e)', () => {
         .set(auth(owner))
         .send({ isActive: true, shouldRecommend: false, variantGroup: null })
         .expect(200);
+    });
+
+    it('includes the logo, the privacy notice and the languages switch', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const admin = await tokenFor(seed.superUser.email);
+      const other = await tokenFor(seed.clientB.email);
+      const restaurantUrl = `/v1/restaurants/${seed.restaurantA.id}`;
+      const configUrl = `/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/bot-config`;
+      const png = Buffer.from([
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0,
+      ]);
+      const uploadLogo = (token: string, file: Buffer) =>
+        http()
+          .patch(`${restaurantUrl}/logo`)
+          .set(auth(token))
+          .attach('file', file, {
+            filename: 'logo.png',
+            contentType: 'image/png',
+          });
+
+      let res = await asBot(secret).expect(200);
+      expect(res.body.restaurant).toMatchObject({
+        logoUrl: null,
+        privacyUrl: null,
+      });
+      // Las sucursales que ya existían quedan con la pregunta del idioma.
+      expect(res.body.branch.features.languages).toBe(true);
+
+      await http()
+        .patch(restaurantUrl)
+        .set(auth(owner))
+        .send({ privacyUrl: 'http://tacos.test/privacidad' })
+        .expect(400);
+      await http()
+        .patch(restaurantUrl)
+        .set(auth(owner))
+        .send({ privacyUrl: 'https://tacos.test/privacidad' })
+        .expect(200);
+
+      const logo = await uploadLogo(owner, png).expect(200);
+      expect(logo.body.restaurant.logoUrl).toBe(
+        `https://res.cloudinary.com/e2e/image/upload/restaurants/${seed.restaurantA.id}/logo.png`,
+      );
+      await uploadLogo(other, png).expect(403);
+      await uploadLogo(owner, Buffer.from('no es una imagen')).expect(400);
+
+      // Como las demás funciones contratadas, solo un admin la cambia.
+      await http()
+        .patch(configUrl)
+        .set(auth(owner))
+        .send({ features: { languages: false } })
+        .expect(403);
+      await http()
+        .patch(configUrl)
+        .set(auth(admin))
+        .send({ features: { languages: false } })
+        .expect(200);
+
+      res = await asBot(secret).expect(200);
+      expect(res.body.restaurant).toMatchObject({
+        logoUrl: expect.stringContaining('/logo.png'),
+        privacyUrl: 'https://tacos.test/privacidad',
+      });
+      expect(res.body.branch.features.languages).toBe(false);
+
+      // Queda como estaba para las demás pruebas.
+      await http().delete(`${restaurantUrl}/logo`).set(auth(owner)).expect(200);
+      await http()
+        .patch(restaurantUrl)
+        .set(auth(owner))
+        .send({ privacyUrl: null })
+        .expect(200);
+      await http()
+        .patch(configUrl)
+        .set(auth(admin))
+        .send({ features: { languages: true } })
+        .expect(200);
+
+      res = await asBot(secret).expect(200);
+      expect(res.body.restaurant).toMatchObject({
+        logoUrl: null,
+        privacyUrl: null,
+      });
     });
 
     it('answers 304 until something changes', async () => {
@@ -1396,6 +1600,43 @@ describe('BotBite API (e2e)', () => {
         .post(url)
         .set(bot())
         .send({ type: 'order', message: 'x' })
+        .expect(400);
+    });
+
+    it('does not repeat an alert sent again with the same eventId', async () => {
+      const url = '/v1/bot/notifications';
+      const notifications = dataSource.getRepository(CashierNotification);
+      const body = {
+        type: 'alert',
+        message: 'La factura no se pudo timbrar',
+        eventId: randomUUID(),
+      };
+
+      const first = await http().post(url).set(bot()).send(body).expect(201);
+      expect(first.body).toEqual({ id: expect.any(String), created: true });
+
+      const again = await http().post(url).set(bot()).send(body).expect(200);
+      expect(again.body).toEqual({ id: first.body.id, created: false });
+
+      // Reintentos a la vez de un aviso nuevo: solo uno se guarda.
+      const concurrent = { ...body, eventId: randomUUID() };
+      const responses = await Promise.all(
+        [1, 2, 3].map(() => http().post(url).set(bot()).send(concurrent)),
+      );
+      expect(responses.map((r) => r.status).sort()).toEqual([200, 200, 201]);
+      expect(
+        new Set(responses.map((r) => (r.body as { id: string }).id)).size,
+      ).toBe(1);
+
+      expect(await notifications.countBy({ eventId: body.eventId })).toBe(1);
+      expect(await notifications.countBy({ eventId: concurrent.eventId })).toBe(
+        1,
+      );
+
+      await http()
+        .post(url)
+        .set(bot())
+        .send({ ...body, eventId: 'no-es-un-uuid' })
         .expect(400);
     });
 
@@ -2713,6 +2954,640 @@ describe('BotBite API (e2e)', () => {
         branchId: seed.branchA.id,
       });
       socket.close();
+    });
+  });
+
+  describe('menu CSV', () => {
+    let menu: Menu;
+    const BOM = String.fromCharCode(0xfeff);
+    const csvFile = (text: string) => Buffer.from(text, 'utf8');
+    const ownPhoto = 'https://res.cloudinary.com/e2e/image/upload/v1/own.jpg';
+
+    const upload = (path: string, token: string, text: string) =>
+      http()
+        .post(`/v1/menus/menu/${menu.id}/${path}`)
+        .set(auth(token))
+        .attach('file', csvFile(text), {
+          filename: 'menu.csv',
+          contentType: 'text/csv',
+        });
+
+    const itemsOf = () =>
+      dataSource.getRepository(MenuItem).find({
+        where: { menuId: menu.id },
+        relations: { product: true, category: true },
+        order: { sortOrder: 'ASC' },
+      });
+
+    beforeAll(async () => {
+      menu = await dataSource
+        .getRepository(Menu)
+        .save({ name: 'Menú CSV', branchId: seed.branchB.id });
+    });
+
+    it('previews without saving anything', async () => {
+      const token = await tokenFor(seed.clientB.email);
+      const events = jest.spyOn(app.get(BotEventsService), 'catalogChanged');
+      const before = await dataSource.getRepository(Product).count();
+
+      const res = await upload(
+        'import/preview',
+        token,
+        `${BOM}Nombre;Descripción;Categoría;Precio;Familia;Recomendado;Activo;Foto URL;Costo\r\n` +
+          'Roll California;Con aguacate;Rollos;120,50;Rollos;sí;;https://example.com/a.jpg;10\r\n' +
+          'ajeno;;Ajenos;99;;;no;;\r\n' +
+          'Agua de jamaica;;Bebidas frías;35;;;;;\r\n',
+      ).expect(200);
+
+      expect(res.body.errors).toEqual([]);
+      expect(res.body.summary).toEqual({
+        rows: 3,
+        categoriesToCreate: 2,
+        productsToCreate: 2,
+        productsToAdd: 1,
+        productsToUpdate: 0,
+        photosToCopy: 1,
+      });
+      expect(res.body.categoriesToCreate).toEqual(['ROLLOS', 'BEBIDAS FRÍAS']);
+      expect(res.body.rows).toEqual([
+        {
+          row: 2,
+          name: 'ROLL CALIFORNIA',
+          category: 'ROLLOS',
+          price: 120.5,
+          action: 'create',
+          photo: 'copy',
+        },
+        {
+          row: 3,
+          name: 'AJENO',
+          category: 'AJENOS',
+          price: 99,
+          action: 'add',
+          photo: null,
+        },
+        {
+          row: 4,
+          name: 'AGUA DE JAMAICA',
+          category: 'BEBIDAS FRÍAS',
+          price: 35,
+          action: 'create',
+          photo: null,
+        },
+      ]);
+      expect(res.body.warnings).toEqual([
+        expect.objectContaining({ row: 1, column: null }),
+      ]);
+
+      expect(await dataSource.getRepository(Product).count()).toBe(before);
+      expect(await itemsOf()).toEqual([]);
+      expect(events).not.toHaveBeenCalled();
+      events.mockRestore();
+    });
+
+    it('reports errors by row and column, and the import saves nothing', async () => {
+      const token = await tokenFor(seed.clientB.email);
+      const file =
+        'nombre,categoria,precio,activo,foto_url\n' +
+        'Taco,Tacos,abc,sí,\n' +
+        ',Tacos,20,,\n' +
+        'Gringa,Tacos,40,tal vez,http://example.com/g.jpg\n' +
+        'gringa,Tacos,40,,\n';
+
+      const preview = await upload('import/preview', token, file).expect(200);
+      expect(
+        preview.body.errors.map(
+          (e: { row: number; column: string }) => `${e.row}:${e.column}`,
+        ),
+      ).toEqual(['2:precio', '3:nombre', '4:activo', '4:foto_url', '5:nombre']);
+      expect(preview.body.errors[0].message).toContain('120.50');
+      expect(preview.body.errors[4].message).toContain('4');
+
+      const res = await upload('import', token, file).expect(400);
+      expect(res.body.errors).toHaveLength(5);
+      expect(await itemsOf()).toEqual([]);
+
+      const missing = await upload(
+        'import/preview',
+        token,
+        'nombre,precio\nTaco,10\n',
+      ).expect(200);
+      expect(missing.body.errors).toEqual([
+        expect.objectContaining({ row: 1, column: 'categoria' }),
+      ]);
+    });
+
+    it('imports in one go, copies the photos and notifies the bot once', async () => {
+      const token = await tokenFor(seed.clientB.email);
+      const events = jest.spyOn(app.get(BotEventsService), 'catalogChanged');
+
+      const res = await upload(
+        'import',
+        token,
+        'nombre,descripcion,categoria,precio,familia,recomendado,activo,foto_url\n' +
+          'Roll California,Con aguacate,Rollos,120.50,Rollos,sí,,https://example.com/a.jpg\n' +
+          'Roll Philadelphia,,Rollos,130,rollos,,no,https://example.com/rota.jpg\n' +
+          `Ajeno,,Ajenos,99,,,,${ownPhoto}\n` +
+          'Agua de jamaica,,Bebidas frías,35,,,,\n',
+      ).expect(201);
+
+      expect(res.body.summary).toMatchObject({
+        productsToCreate: 3,
+        productsToAdd: 1,
+        photosToCopy: 2,
+      });
+      expect(res.body.message).toContain('3');
+      expect(res.body.photoErrors).toEqual([
+        expect.objectContaining({ row: 3, column: 'foto_url' }),
+      ]);
+      expect(events).toHaveBeenCalledTimes(1);
+      expect(events).toHaveBeenCalledWith({ menuId: menu.id });
+      events.mockRestore();
+
+      const items = await itemsOf();
+      const byName = new Map(items.map((item) => [item.product.name, item]));
+
+      expect(byName.get('ROLL CALIFORNIA')).toMatchObject({
+        price: '120.50',
+        variantGroup: 'ROLLOS',
+        shouldRecommend: true,
+        isActive: true,
+        sortOrder: 0,
+        product: {
+          description: 'CON AGUACATE',
+          imageUrl: expect.stringContaining('/product-'),
+        },
+        category: { name: 'ROLLOS' },
+      });
+      expect(byName.get('ROLL PHILADELPHIA')).toMatchObject({
+        variantGroup: 'ROLLOS',
+        shouldRecommend: false,
+        isActive: false,
+        sortOrder: 1,
+        product: { imageUrl: null },
+      });
+      expect(byName.get('AJENO')).toMatchObject({
+        product: { id: seed.foreignMenuItem.productId, imageUrl: ownPhoto },
+        category: { name: 'AJENOS' },
+      });
+
+      const categories = await dataSource
+        .getRepository(Category)
+        .find({ where: { restaurantId: seed.restaurantB.id } });
+      const lastExisting = Math.max(
+        ...categories
+          .filter((c) => !['ROLLOS', 'BEBIDAS FRÍAS'].includes(c.name))
+          .map((c) => c.sortOrder),
+      );
+      expect(categories.find((c) => c.name === 'ROLLOS')?.sortOrder).toBe(
+        lastExisting + 1,
+      );
+      expect(
+        categories.find((c) => c.name === 'BEBIDAS FRÍAS')?.sortOrder,
+      ).toBe(lastExisting + 2);
+    });
+
+    it('updates by name and keeps what is not in the file', async () => {
+      const token = await tokenFor(seed.clientB.email);
+      const productsBefore = await dataSource.getRepository(Product).count();
+
+      const preview = await upload(
+        'import/preview',
+        token,
+        'nombre,categoria,precio,activo\n' +
+          'roll   philadelphia,Rollos,140,sí\n' +
+          'Roll  Califórnia,Rollos,125,\n',
+      ).expect(200);
+      expect(
+        preview.body.rows.map((r: { action: string }) => r.action),
+      ).toEqual(['update', 'update']);
+
+      await upload(
+        'import',
+        token,
+        'nombre,categoria,precio,activo\n' +
+          'roll   philadelphia,Rollos,140,sí\n' +
+          'Roll  Califórnia,Rollos,125,\n',
+      ).expect(201);
+
+      const items = await itemsOf();
+      const byName = new Map(items.map((item) => [item.product.name, item]));
+
+      expect(await dataSource.getRepository(Product).count()).toBe(
+        productsBefore,
+      );
+      expect(byName.get('ROLL PHILADELPHIA')).toMatchObject({
+        price: '140.00',
+        isActive: true,
+        sortOrder: 0,
+      });
+      // Lo que no viene en la celda (o en el archivo) se queda igual.
+      expect(byName.get('ROLL CALIFORNIA')).toMatchObject({
+        price: '125.00',
+        variantGroup: 'ROLLOS',
+        shouldRecommend: true,
+        sortOrder: 1,
+        product: { description: 'CON AGUACATE' },
+      });
+      expect(byName.get('AGUA DE JAMAICA')).toMatchObject({ price: '35.00' });
+    });
+
+    it('warns when a new product looks like one that left the file', async () => {
+      const token = await tokenFor(seed.clientB.email);
+
+      const res = await upload(
+        'import/preview',
+        token,
+        'nombre,categoria,precio\n' +
+          'Roll Californias,Rollos,125\n' +
+          'Roll Philadelphia,Rollos,140\n',
+      ).expect(200);
+
+      expect(res.body.errors).toEqual([]);
+      expect(res.body.warnings).toEqual([
+        expect.objectContaining({
+          row: 2,
+          column: 'nombre',
+          message: expect.stringContaining('ROLL CALIFORNIA'),
+        }),
+      ]);
+    });
+
+    it('exports the menu in the format it imports', async () => {
+      const token = await tokenFor(seed.clientB.email);
+
+      const res = await http()
+        .get(`/v1/menus/menu/${menu.id}/export`)
+        .set(auth(token))
+        .buffer(true)
+        .parse((response, done) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () => done(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.headers['content-disposition']).toContain('-menu-csv.csv');
+
+      const text = (res.body as Buffer).toString('utf8');
+      const lines = text.split('\r\n');
+      expect(text.startsWith(BOM)).toBe(true);
+      expect(lines[0]).toBe(
+        `${BOM}nombre,descripcion,categoria,precio,familia,recomendado,activo,foto_url`,
+      );
+      expect(lines.slice(1, 5)).toEqual([
+        `AJENO,,AJENOS,99.00,,no,sí,${ownPhoto}`,
+        'ROLL PHILADELPHIA,,ROLLOS,140.00,ROLLOS,no,sí,',
+        expect.stringMatching(
+          /^ROLL CALIFORNIA,CON AGUACATE,ROLLOS,125\.00,ROLLOS,sí,sí,https:/,
+        ),
+        'AGUA DE JAMAICA,,BEBIDAS FRÍAS,35.00,,no,sí,',
+      ]);
+
+      // Lo exportado se vuelve a importar sin errores ni cambios de producto.
+      const again = await upload('import/preview', token, text).expect(200);
+      expect(again.body.errors).toEqual([]);
+      expect(again.body.summary).toMatchObject({
+        productsToCreate: 0,
+        productsToAdd: 0,
+        productsToUpdate: 4,
+        photosToCopy: 0,
+      });
+    });
+
+    it('another client cannot import or export it', async () => {
+      const other = await tokenFor(seed.clientA.email);
+      const file = 'nombre,categoria,precio\nTaco,Tacos,10\n';
+
+      await upload('import/preview', other, file).expect(403);
+      await upload('import', other, file).expect(403);
+      await http()
+        .get(`/v1/menus/menu/${menu.id}/export`)
+        .set(auth(other))
+        .expect(403);
+    });
+
+    it('rejects files that are not text', async () => {
+      const token = await tokenFor(seed.clientB.email);
+
+      await http()
+        .post(`/v1/menus/menu/${menu.id}/import/preview`)
+        .set(auth(token))
+        .attach('file', Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]), {
+          filename: 'menu.csv',
+          contentType: 'text/csv',
+        })
+        .expect(400);
+    });
+  });
+
+  describe('customers screen', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const daysAgo = (days: number) => new Date(Date.now() - days * DAY);
+    const url = () => `/v1/restaurants/${seed.restaurantB.id}/customers`;
+    const ids: Record<string, string> = {};
+
+    const list = async (query = '') => {
+      const token = await tokenFor(seed.clientB.email);
+      return http().get(`${url()}${query}`).set(auth(token)).expect(200);
+    };
+    const names = (body: unknown) =>
+      (body as { customers: { name: string }[] }).customers.map((c) => c.name);
+
+    beforeAll(async () => {
+      const customers = dataSource.getRepository(Customer);
+      const memberships = dataSource.getRepository(RestaurantCustomer);
+      const orders = dataSource.getRepository(Order);
+      const rounds = dataSource.getRepository(OrderRound);
+      const items = dataSource.getRepository(OrderItem);
+      const restaurantId = seed.restaurantB.id;
+
+      const people = [
+        // Recurrente: 2 cuentas pagadas, una cancelada y cashback.
+        {
+          name: 'Ana',
+          phone: '+5216779900001',
+          visits: 3,
+          first: 90,
+          last: 2,
+          promos: PromosStatus.ACCEPTED,
+          unsubscribed: false,
+          wallet: 10,
+        },
+        {
+          name: 'Beto',
+          phone: '+5216779900002',
+          visits: 1,
+          first: 0,
+          last: 0,
+          promos: PromosStatus.PENDING,
+          unsubscribed: false,
+          wallet: 0,
+        },
+        // Inactivo y dado de baja, aunque había aceptado.
+        {
+          name: 'Caro',
+          phone: '+5216779900003',
+          visits: 2,
+          first: 100,
+          last: 45,
+          promos: PromosStatus.DECLINED,
+          unsubscribed: true,
+          wallet: 0,
+        },
+        {
+          name: 'Dani',
+          phone: '+5216779900004',
+          visits: 2,
+          first: 60,
+          last: 5,
+          promos: PromosStatus.DECLINED,
+          unsubscribed: false,
+          wallet: 0,
+        },
+      ];
+
+      for (const person of people) {
+        const customer = await customers.save(
+          customers.create({ name: person.name, phone: person.phone }),
+        );
+        const membership = await memberships.save(
+          memberships.create({
+            restaurantId,
+            customerId: customer.id,
+            visits: person.visits,
+            firstVisitAt: daysAgo(person.first),
+            lastVisitAt: daysAgo(person.last),
+            promos: person.promos,
+            promosAt: daysAgo(person.last),
+            unsubscribedAt: person.unsubscribed ? daysAgo(40) : null,
+            walletBalance: person.wallet,
+          }),
+        );
+        ids[person.name] = membership.id;
+        ids[`${person.name}.customer`] = customer.id;
+      }
+
+      const order = (status: OrderStatus, total: number) =>
+        orders.save(
+          orders.create({
+            branchId: seed.branchB.id,
+            customerId: ids['Ana.customer'],
+            status,
+            subtotal: total,
+            total,
+            tip: 20,
+          }),
+        );
+      const round = (orderId: string, number: number, status: RoundStatus) =>
+        rounds.save(rounds.create({ orderId, number, status }));
+      const item = (
+        orderId: string,
+        roundId: string,
+        productName: string,
+        quantity: number,
+      ) =>
+        items.save(
+          items.create({
+            orderId,
+            roundId,
+            productName,
+            quantity,
+            price: 10,
+            menuItemId: seed.foreignMenuItem.id,
+          }),
+        );
+
+      const first = await order(OrderStatus.PAID, 100);
+      const firstRound = await round(first.id, 1, RoundStatus.DELIVERED);
+      await item(first.id, firstRound.id, 'TACO', 3);
+      await item(first.id, firstRound.id, 'AGUA', 1);
+
+      const second = await order(OrderStatus.SETTLED, 200);
+      const delivered = await round(second.id, 1, RoundStatus.DELIVERED);
+      const cancelled = await round(second.id, 2, RoundStatus.CANCELLED);
+      await item(second.id, delivered.id, 'TACO', 1);
+      await item(second.id, delivered.id, 'TORTA', 1);
+      await item(second.id, cancelled.id, 'POSTRE', 5);
+
+      // Una cuenta cancelada no cuenta como gasto.
+      const lost = await order(OrderStatus.CANCELLED, 999);
+      const lostRound = await round(lost.id, 1, RoundStatus.NEW);
+      await item(lost.id, lostRound.id, 'POSTRE', 9);
+
+      await dataSource.getRepository(WalletMovement).save([
+        {
+          type: WalletMovementType.CASHBACK,
+          amount: 5,
+          balanceAfter: 5,
+          restaurantCustomerId: ids['Ana'],
+          orderId: first.id,
+        },
+        {
+          type: WalletMovementType.CASHBACK,
+          amount: 7.5,
+          balanceAfter: 12.5,
+          restaurantCustomerId: ids['Ana'],
+          orderId: second.id,
+        },
+        {
+          type: WalletMovementType.USE,
+          amount: -2.5,
+          balanceAfter: 10,
+          restaurantCustomerId: ids['Ana'],
+          orderId: second.id,
+        },
+      ]);
+    });
+
+    it('shows visits, spending, cashback, promotions, status and favorites', async () => {
+      const res = await list('?sort=name&order=asc');
+
+      expect(res.body.total).toBe(4);
+      expect(res.body.totals).toEqual({
+        customers: 4,
+        newThisMonth: 1,
+        recurring: 1,
+        promosAccepted: 1,
+      });
+      expect(res.body.exportEnabled).toBe(true);
+      expect(names(res.body)).toEqual(['Ana', 'Beto', 'Caro', 'Dani']);
+
+      const [ana, beto, caro, dani] = res.body.customers;
+      expect(ana).toMatchObject({
+        id: ids['Ana'],
+        phone: '+521••••••••01',
+        visits: 3,
+        spent: 300,
+        paidOrders: 2,
+        avgTicket: 150,
+        walletBalance: 10,
+        cashbackEarned: 12.5,
+        promos: 'accepted',
+        status: 'recurring',
+        favorites: ['TACO', 'AGUA', 'TORTA'],
+      });
+      expect(beto).toMatchObject({
+        status: 'new',
+        promos: 'pending',
+        spent: 0,
+        favorites: [],
+      });
+      expect(caro).toMatchObject({
+        status: 'inactive',
+        promos: 'unsubscribed',
+      });
+      expect(dani).toMatchObject({ status: 'occasional', promos: 'declined' });
+      expect(JSON.stringify(res.body)).not.toContain('+5216779900001');
+    });
+
+    it('filters, searches, sorts and pages on the server', async () => {
+      expect(names((await list('?status=inactive')).body)).toEqual(['Caro']);
+      expect(names((await list('?promos=accepted')).body)).toEqual(['Ana']);
+      expect(names((await list('?search=bet')).body)).toEqual(['Beto']);
+      expect(names((await list('?search=9900003')).body)).toEqual(['Caro']);
+      expect(names((await list('?search=%25')).body)).toEqual([]);
+      expect(names((await list('?sort=spent&order=desc')).body)[0]).toBe('Ana');
+      expect(names((await list('?sort=status&order=desc')).body)[0]).toBe(
+        'Caro',
+      );
+
+      const page = await list('?sort=name&order=asc&limit=2&offset=2');
+      expect(names(page.body)).toEqual(['Caro', 'Dani']);
+      expect(page.body.total).toBe(4);
+
+      const owner = await tokenFor(seed.clientB.email);
+      await http().get(`${url()}?status=vip`).set(auth(owner)).expect(400);
+      await http().get(`${url()}?sort=phone`).set(auth(owner)).expect(400);
+    });
+
+    it('shows a full phone only on request, and records who saw it', async () => {
+      const owner = await tokenFor(seed.clientB.email);
+      const other = await tokenFor(seed.clientA.email);
+      const phoneUrl = `${url()}/${ids['Dani']}/phone`;
+
+      const res = await http().post(phoneUrl).set(auth(owner)).expect(200);
+      expect(res.body).toEqual({ phone: '+5216779900004' });
+
+      await http().post(phoneUrl).set(auth(other)).expect(403);
+      await http().get(url()).set(auth(other)).expect(403);
+      // Un cliente de otro restaurante no se encuentra por este.
+      await http()
+        .post(
+          `/v1/restaurants/${seed.restaurantB.id}/customers/${randomUUID()}/phone`,
+        )
+        .set(auth(owner))
+        .expect(404);
+
+      const logs = await dataSource
+        .getRepository(AuditLog)
+        .findBy({ subjectId: ids['Dani'] });
+      expect(logs).toEqual([
+        expect.objectContaining({
+          userId: seed.clientB.id,
+          restaurantId: seed.restaurantB.id,
+          action: 'customer.phone_viewed',
+          recordCount: 1,
+        }),
+      ]);
+      expect(JSON.stringify(logs)).not.toContain('+521');
+    });
+
+    it('exports the full phone only of who accepted promotions', async () => {
+      const owner = await tokenFor(seed.clientB.email);
+      const exportCsv = (query = '') =>
+        http()
+          .get(`${url()}/export${query}`)
+          .set(auth(owner))
+          .buffer(true)
+          .parse((response, done) => {
+            const chunks: Buffer[] = [];
+            response.on('data', (chunk: Buffer) => chunks.push(chunk));
+            response.on('end', () => done(null, Buffer.concat(chunks)));
+          });
+
+      const res = await exportCsv('?sort=name&order=asc').expect(200);
+      expect(res.headers['content-type']).toContain('text/csv');
+      const lines = (res.body as Buffer).toString('utf8').split('\r\n');
+
+      expect(lines[0]).toContain('nombre,telefono,visitas');
+      expect(lines[1]).toMatch(/^Ana,\+5216779900001,3,/);
+      expect(lines[1]).toContain(',aceptó,');
+      expect(lines[1]).toContain('TACO | AGUA | TORTA');
+      expect(lines[3]).toMatch(/^Caro,\+521••••••••03,/);
+      expect(lines.filter(Boolean)).toHaveLength(5);
+
+      const accepted = await exportCsv('?promos=accepted').expect(200);
+      expect(
+        (accepted.body as Buffer)
+          .toString('utf8')
+          .split('\r\n')
+          .filter(Boolean),
+      ).toHaveLength(2);
+
+      const exports = await dataSource.getRepository(AuditLog).find({
+        where: {
+          restaurantId: seed.restaurantB.id,
+          action: 'customers.exported' as AuditLog['action'],
+        },
+        order: { createdAt: 'ASC' },
+      });
+      expect(exports.map((log) => log.recordCount)).toEqual([4, 1]);
+    });
+
+    it('does not export until it is switched on', async () => {
+      const owner = await tokenFor(seed.clientB.email);
+      const switchOff = jest
+        .spyOn(app.get(CustomerReportService), 'exportEnabled', 'get')
+        .mockReturnValue(false);
+
+      try {
+        await http().get(`${url()}/export`).set(auth(owner)).expect(403);
+        expect((await list()).body.exportEnabled).toBe(false);
+      } finally {
+        switchOff.mockRestore();
+      }
     });
   });
 });

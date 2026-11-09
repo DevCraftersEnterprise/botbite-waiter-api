@@ -41,6 +41,11 @@ export class EnvironmentVariables {
   @MinLength(32)
   BOT_WEBHOOK_SECRET?: string;
 
+  // Exportar clientes a CSV. En producción está apagado si no se define.
+  @IsOptional()
+  @IsBooleanString()
+  CUSTOMERS_EXPORT_ENABLED?: string;
+
   // Documentación de la API (/docs). Sin estas dos no se publica en producción.
   @IsOptional()
   @IsString()

@@ -7,6 +7,7 @@ import { CreateRestaurantDto } from '@/modules/restaurants/dto/create-restaurant
 import { FindRestaurantsDto } from '@/modules/restaurants/dto/find-resturants.dto';
 import { UpdateRestaurantDto } from '@/modules/restaurants/dto/update-restaurant.dto';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
+import { RestaurantLogoStorage } from '@/modules/restaurants/restaurant-logo.storage';
 import { changeRestaurantStatusUseCase } from '@/modules/restaurants/use-cases/change-restaurant-status.use-case';
 import { createRestaurantUseCase } from '@/modules/restaurants/use-cases/create-restaurant.use-case';
 import { findAllRestaurantsByClientUseCase } from '@/modules/restaurants/use-cases/find-all-restaurants-by-client.use-case';
@@ -22,7 +23,37 @@ export class RestaurantsService {
     @InjectRepository(Restaurant)
     private readonly restaurantRepository: Repository<Restaurant>,
     private readonly translationService: TranslationService,
+    private readonly logoStorage: RestaurantLogoStorage,
   ) {}
+
+  /** Sube el logo (o lo quita con null). La propiedad ya se validó en el controlador. */
+  async updateLogo(restaurantId: string, image: Buffer | null, lang: string) {
+    const { restaurant } = await findOneRestaurantUseCase({
+      term: restaurantId,
+      lang,
+      repository: this.restaurantRepository,
+      translationService: this.translationService,
+    });
+
+    const logoUrl = image
+      ? await this.logoStorage.upload(image, restaurant.id)
+      : null;
+
+    await this.restaurantRepository.update({ id: restaurant.id }, { logoUrl });
+    restaurant.logoUrl = logoUrl;
+
+    this.logger.log(
+      `Restaurant logo ${logoUrl ? 'updated' : 'removed'}: ${restaurant.id}`,
+    );
+
+    return {
+      restaurant,
+      message: this.translationService.translate(
+        'restaurants.restaurant_updated',
+        lang,
+      ),
+    };
+  }
 
   createRestaurant(
     createRestaurantDto: CreateRestaurantDto,

@@ -4,10 +4,12 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsUrl,
   Matches,
   Max,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
 import { SLUG_PATTERN } from '@/common/utils/slug.util';
 import { CreateRestaurantDto } from '@/modules/restaurants/dto/create-restaurant.dto';
@@ -28,4 +30,11 @@ export class UpdateRestaurantDto extends PartialType(CreateRestaurantDto) {
   @Max(100)
   @Type(() => Number)
   walletPct?: number;
+
+  /** Aviso de privacidad del restaurante; null lo quita. */
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @IsUrl({ protocols: ['https'], require_protocol: true })
+  @MaxLength(500)
+  privacyUrl?: string | null;
 }
