@@ -56,6 +56,14 @@ export default () => {
       // Firma los avisos al servicio del mesero. Sin él no se envían.
       webhookSecret: process.env.BOT_WEBHOOK_SECRET,
     },
+    customers: {
+      // Exportar clientes con teléfono: apagado en producción hasta revisar el
+      // aviso de privacidad. Fuera de producción, encendido.
+      exportEnabled: toBool(
+        process.env.CUSTOMERS_EXPORT_ENABLED,
+        !isProduction,
+      ),
+    },
     docs: {
       user: process.env.DOCS_USER,
       password: process.env.DOCS_PASSWORD,

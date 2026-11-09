@@ -1,3 +1,5 @@
+import { FORMULA_START, toCsv } from '@/common/utils/csv.util';
+
 /**
  * Formato del CSV del menú: lectura tolerante a como lo guarda Excel y
  * escritura que Excel abre bien. Funciones puras, sin acceso a la base.
@@ -144,8 +146,6 @@ export const parseCsv = (text: string, separator: string): string[][] => {
   return records;
 };
 
-const FORMULA_START = /^[=+\-@\t\r]/;
-
 /** La exportación antepone ' a lo que Excel tomaría por fórmula; aquí se quita. */
 export const unescapeCell = (value: string): string =>
   value.startsWith("'") && FORMULA_START.test(value.slice(1))
@@ -246,11 +246,6 @@ export const areSimilarNames = (a: string, b: string): boolean => {
   );
 };
 
-const escapeCell = (value: string): string => {
-  const safe = FORMULA_START.test(value) ? `'${value}` : value;
-  return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
-};
-
 export interface MenuCsvExportRow {
   name: string;
   description: string | null;
@@ -263,24 +258,17 @@ export interface MenuCsvExportRow {
 }
 
 /** UTF-8 con BOM y comas, para que Excel respete los acentos. */
-export const toMenuCsv = (rows: MenuCsvExportRow[]): string => {
-  const lines = [
-    MENU_CSV_COLUMNS.join(','),
-    ...rows.map((row) =>
-      [
-        row.name,
-        row.description ?? '',
-        row.category,
-        row.price.toFixed(2),
-        row.family ?? '',
-        row.recommended ? 'sí' : 'no',
-        row.active ? 'sí' : 'no',
-        row.photoUrl ?? '',
-      ]
-        .map(escapeCell)
-        .join(','),
-    ),
-  ];
-
-  return `\uFEFF${lines.join('\r\n')}\r\n`;
-};
+export const toMenuCsv = (rows: MenuCsvExportRow[]): string =>
+  toCsv([
+    [...MENU_CSV_COLUMNS],
+    ...rows.map((row) => [
+      row.name,
+      row.description ?? '',
+      row.category,
+      row.price.toFixed(2),
+      row.family ?? '',
+      row.recommended ? 'sí' : 'no',
+      row.active ? 'sí' : 'no',
+      row.photoUrl ?? '',
+    ]),
+  ]);
