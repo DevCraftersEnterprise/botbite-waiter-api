@@ -52,6 +52,25 @@ export const uploadPictureToCloudinary = (
   });
 
 /**
+ * Logo del restaurante: Cloudinary lo deja cuadrado (512 px) sin recortarlo,
+ * con fondo transparente si el formato lo permite.
+ */
+export const uploadLogoToCloudinary = (
+  buffer: Buffer,
+  folder: string,
+  fileName: string,
+) =>
+  uploadBuffer(buffer, {
+    folder,
+    public_id: fileName,
+    resource_type: 'image',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    transformation: [
+      { width: 512, height: 512, crop: 'pad', background: 'rgb:ffffff00' },
+    ],
+  });
+
+/**
  * Copia una imagen pública a Cloudinary. La descarga la hace Cloudinary, no
  * este servidor, así que una URL interna de la red no queda expuesta.
  */

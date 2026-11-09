@@ -19,6 +19,7 @@ export const findOneRestaurantUseCase = async (
       slug: true,
       walletPct: true,
       logoUrl: true,
+      privacyUrl: true,
       isActive: true,
       userId: true,
       user: { id: true, isActive: true },

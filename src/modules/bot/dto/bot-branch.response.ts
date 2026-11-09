@@ -15,6 +15,23 @@ export class BotRestaurant {
     description: 'Porcentaje de cashback del monedero',
   })
   walletPct: number;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'https://res.cloudinary.com/botbite/image/upload/logo.png',
+    description: 'Logo cuadrado del restaurante; null si no tiene',
+  })
+  logoUrl: string | null;
+
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    example: 'https://restaurante.mx/privacidad',
+    description:
+      'Aviso de privacidad del restaurante. El de BotBite se muestra siempre; este se agrega si existe',
+  })
+  privacyUrl: string | null;
 }
 
 export class BotFeatures {
@@ -41,6 +58,12 @@ export class BotFeatures {
 
   @ApiProperty()
   survey: boolean;
+
+  @ApiProperty({
+    description:
+      'Pregunta el idioma al cliente. Apagado: atiende solo en español y pide la mesa directo',
+  })
+  languages: boolean;
 }
 
 export class BotBranchConfig {
