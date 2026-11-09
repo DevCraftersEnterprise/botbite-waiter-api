@@ -12,6 +12,11 @@ describe('slugify', () => {
     expect(slugify('  PRUEBA   MARISCOS!! ', 'x')).toBe('prueba-mariscos');
   });
 
+  it('keeps words with an apostrophe together', () => {
+    expect(slugify("Sushilito's", 'x')).toBe('sushilitos');
+    expect(slugify('Sushilito’s Morelos', 'x')).toBe('sushilitos-morelos');
+  });
+
   it('uses the fallback when nothing is left', () => {
     expect(slugify('¡¡¡', 'sucursal')).toBe('sucursal');
   });

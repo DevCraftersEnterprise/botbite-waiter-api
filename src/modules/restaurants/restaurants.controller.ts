@@ -8,9 +8,11 @@ import {
   Patch,
   Post,
   Query,
+  UseInterceptors,
 } from '@nestjs/common';
 import { Lang } from '@/common/decorators/lang.decorator';
 import { AccessControlService } from '@/core/access/access-control.service';
+import { CatalogChangedInterceptor } from '@/modules/bot-events/catalog-changed.interceptor';
 import { Auth } from '@/core/auth/decorators/auth.decorator';
 import { CurrentUser } from '@/core/auth/decorators/current-user.decorator';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
@@ -42,6 +44,7 @@ export class RestaurantsController {
   }
 
   @Patch(':restaurantId')
+  @UseInterceptors(CatalogChangedInterceptor)
   @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
   async updateRestaurant(
     @Param('restaurantId', ParseUUIDPipe) restaurantId: string,

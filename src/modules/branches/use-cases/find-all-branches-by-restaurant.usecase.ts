@@ -65,9 +65,13 @@ export class FindAllBranchesByRestaurantUseCase {
         surveyUrl: true,
         qrUrl: true,
         slug: true,
+        // El panel marca las sucursales que no verifican la ubicación.
+        verifyLocation: true,
         createdAt: true,
         restaurant: {
           name: true,
+          // Prefijo fijo del slug de la sucursal en el Mesero digital.
+          slug: true,
           user: { id: true },
         },
         menus: true,

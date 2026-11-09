@@ -200,10 +200,15 @@ describe('BotBite API (e2e)', () => {
     it('a client can see its own branches but not another restaurant', async () => {
       const { access_token } = await login(seed.clientB.email);
 
-      await http()
+      const own = await http()
         .get(`/v1/branches/restaurant/${seed.restaurantB.id}`)
         .set(auth(access_token))
         .expect(200);
+      // El panel marca la verificación de ubicación y fija el prefijo del slug.
+      expect(own.body.branches[0]).toMatchObject({
+        verifyLocation: false,
+        restaurant: { slug: seed.restaurantB.slug },
+      });
 
       await http()
         .get(`/v1/branches/restaurant/${seed.restaurantA.id}`)
@@ -525,6 +530,17 @@ describe('BotBite API (e2e)', () => {
       expect(res.body.restaurant.slug).toBe('punto-de-union');
     });
 
+    it('an apostrophe does not split the slug', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .post('/v1/restaurants')
+        .set(auth(owner))
+        .send({ name: "Sushilito's" })
+        .expect(201);
+
+      expect(res.body.restaurant.slug).toBe('sushilitos');
+    });
+
     it('the owner sets the wallet percentage, only an admin the slug', async () => {
       const owner = await tokenFor(seed.clientA.email);
       const admin = await tokenFor(seed.superUser.email);
@@ -584,6 +600,73 @@ describe('BotBite API (e2e)', () => {
         .set(auth(owner))
         .send({ latitude: null })
         .expect(400);
+    });
+
+    it('rounds the coordinates as Google Maps copies them', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ latitude: 27.5350381, longitude: '-109.9540312' })
+        .expect(200);
+
+      expect(res.body.config).toMatchObject({
+        latitude: 27.535038,
+        longitude: -109.954031,
+      });
+
+      await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ latitude: 'norte' })
+        .expect(400);
+    });
+
+    it('notifies the bot when the configuration, the branch or the restaurant is saved', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const events = jest.spyOn(app.get(BotEventsService), 'catalogChanged');
+
+      await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ geofenceMeters: 150 })
+        .expect(200);
+      expect(events).toHaveBeenLastCalledWith(
+        expect.objectContaining({ branchId: seed.branchA.id }),
+      );
+
+      await http()
+        .patch(
+          `/v1/branches/restaurant/${seed.restaurantA.id}/${seed.branchA.id}`,
+        )
+        .set(auth(owner))
+        .send({ address: 'Calle 1 #10' })
+        .expect(200);
+      expect(events).toHaveBeenLastCalledWith(
+        expect.objectContaining({ branchId: seed.branchA.id }),
+      );
+
+      await http()
+        .patch(`/v1/restaurants/${seed.restaurantA.id}`)
+        .set(auth(owner))
+        .send({ name: 'Tacos A' })
+        .expect(200);
+      expect(events).toHaveBeenLastCalledWith({
+        branchId: undefined,
+        menuId: undefined,
+        restaurantId: seed.restaurantA.id,
+        categoryId: undefined,
+      });
+
+      // Un cambio que falla no avisa.
+      const calls = events.mock.calls.length;
+      await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ geofenceMeters: 1 })
+        .expect(400);
+      expect(events).toHaveBeenCalledTimes(calls);
+      events.mockRestore();
     });
 
     it('only an admin changes what connects to n8n or what was contracted', async () => {

@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
   IsArray,
@@ -17,6 +17,18 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { SLUG_PATTERN } from '@/common/utils/slug.util';
+
+/**
+ * La base guarda 6 decimales (unos 10 cm). Google Maps copia 7 o más, así que
+ * se redondea en lugar de rechazar. Acepta también el número como texto.
+ */
+const toCoordinate = ({ value }: { value: unknown }): unknown => {
+  const number =
+    typeof value === 'string' && value.trim() !== '' ? Number(value) : value;
+  return typeof number === 'number' && Number.isFinite(number)
+    ? Math.round(number * 1e6) / 1e6
+    : value;
+};
 
 export class BranchFeaturesDto {
   @IsOptional()
@@ -87,14 +99,16 @@ export class UpdateBotConfigDto {
 
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
-  @IsNumber({ maxDecimalPlaces: 6 })
+  @Transform(toCoordinate)
+  @IsNumber()
   @Min(-90)
   @Max(90)
   latitude?: number | null;
 
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
-  @IsNumber({ maxDecimalPlaces: 6 })
+  @Transform(toCoordinate)
+  @IsNumber()
   @Min(-180)
   @Max(180)
   longitude?: number | null;
