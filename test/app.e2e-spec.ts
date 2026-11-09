@@ -7,7 +7,10 @@ import { AddressInfo } from 'net';
 import { io, Socket } from 'socket.io-client';
 import request from 'supertest';
 import { DataSource, Like } from 'typeorm';
-import { signBotEvent } from '@/modules/bot-events/bot-events.service';
+import {
+  BotEventsService,
+  signBotEvent,
+} from '@/modules/bot-events/bot-events.service';
 import { AppModule } from '@/app.module';
 import { configureApp } from '@/app.setup';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
@@ -17,6 +20,7 @@ import { CustomerTaxProfile } from '@/modules/customers/entities/customer-tax-pr
 import { Customer } from '@/modules/customers/entities/customer.entity';
 import { RestaurantCustomer } from '@/modules/customers/entities/restaurant-customer.entity';
 import { WalletMovement } from '@/modules/customers/entities/wallet-movement.entity';
+import { MenuPhotoService } from '@/modules/menus/csv/menu-photo.service';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
@@ -32,6 +36,17 @@ const PASSWORD = 'Sup3r-secret!';
 const ASSISTANT_PHONE = '+5215511110001';
 const RECEPTION_PHONE = '+5215511110002';
 const CUSTOMER_PHONE = '+5215522220001';
+
+/** Las fotos del CSV no salen a Cloudinary; "rota" simula una que no se copia. */
+const fakeMenuPhotos = {
+  isOwnUrl: (url: string) => url.startsWith('https://res.cloudinary.com/e2e/'),
+  copy: (url: string, restaurantId: string, productId: string) =>
+    url.includes('rota')
+      ? Promise.reject(new Error('Resource not found'))
+      : Promise.resolve(
+          `https://res.cloudinary.com/e2e/image/upload/products/${restaurantId}/product-${productId}.jpg`,
+        ),
+};
 
 interface Seed {
   superUser: User;
@@ -79,7 +94,10 @@ describe('BotBite API (e2e)', () => {
   beforeAll(async () => {
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(MenuPhotoService)
+      .useValue(fakeMenuPhotos)
+      .compile();
 
     app = moduleRef.createNestApplication<NestExpressApplication>({
       logger: ['error'],
@@ -2713,6 +2731,331 @@ describe('BotBite API (e2e)', () => {
         branchId: seed.branchA.id,
       });
       socket.close();
+    });
+  });
+
+  describe('menu CSV', () => {
+    let menu: Menu;
+    const BOM = String.fromCharCode(0xfeff);
+    const csvFile = (text: string) => Buffer.from(text, 'utf8');
+    const ownPhoto = 'https://res.cloudinary.com/e2e/image/upload/v1/own.jpg';
+
+    const upload = (path: string, token: string, text: string) =>
+      http()
+        .post(`/v1/menus/menu/${menu.id}/${path}`)
+        .set(auth(token))
+        .attach('file', csvFile(text), {
+          filename: 'menu.csv',
+          contentType: 'text/csv',
+        });
+
+    const itemsOf = () =>
+      dataSource.getRepository(MenuItem).find({
+        where: { menuId: menu.id },
+        relations: { product: true, category: true },
+        order: { sortOrder: 'ASC' },
+      });
+
+    beforeAll(async () => {
+      menu = await dataSource
+        .getRepository(Menu)
+        .save({ name: 'Menú CSV', branchId: seed.branchB.id });
+    });
+
+    it('previews without saving anything', async () => {
+      const token = await tokenFor(seed.clientB.email);
+      const events = jest.spyOn(app.get(BotEventsService), 'catalogChanged');
+      const before = await dataSource.getRepository(Product).count();
+
+      const res = await upload(
+        'import/preview',
+        token,
+        `${BOM}Nombre;Descripción;Categoría;Precio;Familia;Recomendado;Activo;Foto URL;Costo\r\n` +
+          'Roll California;Con aguacate;Rollos;120,50;Rollos;sí;;https://example.com/a.jpg;10\r\n' +
+          'ajeno;;Ajenos;99;;;no;;\r\n' +
+          'Agua de jamaica;;Bebidas frías;35;;;;;\r\n',
+      ).expect(200);
+
+      expect(res.body.errors).toEqual([]);
+      expect(res.body.summary).toEqual({
+        rows: 3,
+        categoriesToCreate: 2,
+        productsToCreate: 2,
+        productsToAdd: 1,
+        productsToUpdate: 0,
+        photosToCopy: 1,
+      });
+      expect(res.body.categoriesToCreate).toEqual(['ROLLOS', 'BEBIDAS FRÍAS']);
+      expect(res.body.rows).toEqual([
+        {
+          row: 2,
+          name: 'ROLL CALIFORNIA',
+          category: 'ROLLOS',
+          price: 120.5,
+          action: 'create',
+          photo: 'copy',
+        },
+        {
+          row: 3,
+          name: 'AJENO',
+          category: 'AJENOS',
+          price: 99,
+          action: 'add',
+          photo: null,
+        },
+        {
+          row: 4,
+          name: 'AGUA DE JAMAICA',
+          category: 'BEBIDAS FRÍAS',
+          price: 35,
+          action: 'create',
+          photo: null,
+        },
+      ]);
+      expect(res.body.warnings).toEqual([
+        expect.objectContaining({ row: 1, column: null }),
+      ]);
+
+      expect(await dataSource.getRepository(Product).count()).toBe(before);
+      expect(await itemsOf()).toEqual([]);
+      expect(events).not.toHaveBeenCalled();
+      events.mockRestore();
+    });
+
+    it('reports errors by row and column, and the import saves nothing', async () => {
+      const token = await tokenFor(seed.clientB.email);
+      const file =
+        'nombre,categoria,precio,activo,foto_url\n' +
+        'Taco,Tacos,abc,sí,\n' +
+        ',Tacos,20,,\n' +
+        'Gringa,Tacos,40,tal vez,http://example.com/g.jpg\n' +
+        'gringa,Tacos,40,,\n';
+
+      const preview = await upload('import/preview', token, file).expect(200);
+      expect(
+        preview.body.errors.map(
+          (e: { row: number; column: string }) => `${e.row}:${e.column}`,
+        ),
+      ).toEqual(['2:precio', '3:nombre', '4:activo', '4:foto_url', '5:nombre']);
+      expect(preview.body.errors[0].message).toContain('120.50');
+      expect(preview.body.errors[4].message).toContain('4');
+
+      const res = await upload('import', token, file).expect(400);
+      expect(res.body.errors).toHaveLength(5);
+      expect(await itemsOf()).toEqual([]);
+
+      const missing = await upload(
+        'import/preview',
+        token,
+        'nombre,precio\nTaco,10\n',
+      ).expect(200);
+      expect(missing.body.errors).toEqual([
+        expect.objectContaining({ row: 1, column: 'categoria' }),
+      ]);
+    });
+
+    it('imports in one go, copies the photos and notifies the bot once', async () => {
+      const token = await tokenFor(seed.clientB.email);
+      const events = jest.spyOn(app.get(BotEventsService), 'catalogChanged');
+
+      const res = await upload(
+        'import',
+        token,
+        'nombre,descripcion,categoria,precio,familia,recomendado,activo,foto_url\n' +
+          'Roll California,Con aguacate,Rollos,120.50,Rollos,sí,,https://example.com/a.jpg\n' +
+          'Roll Philadelphia,,Rollos,130,rollos,,no,https://example.com/rota.jpg\n' +
+          `Ajeno,,Ajenos,99,,,,${ownPhoto}\n` +
+          'Agua de jamaica,,Bebidas frías,35,,,,\n',
+      ).expect(201);
+
+      expect(res.body.summary).toMatchObject({
+        productsToCreate: 3,
+        productsToAdd: 1,
+        photosToCopy: 2,
+      });
+      expect(res.body.message).toContain('3');
+      expect(res.body.photoErrors).toEqual([
+        expect.objectContaining({ row: 3, column: 'foto_url' }),
+      ]);
+      expect(events).toHaveBeenCalledTimes(1);
+      expect(events).toHaveBeenCalledWith({ menuId: menu.id });
+      events.mockRestore();
+
+      const items = await itemsOf();
+      const byName = new Map(items.map((item) => [item.product.name, item]));
+
+      expect(byName.get('ROLL CALIFORNIA')).toMatchObject({
+        price: '120.50',
+        variantGroup: 'ROLLOS',
+        shouldRecommend: true,
+        isActive: true,
+        sortOrder: 0,
+        product: {
+          description: 'CON AGUACATE',
+          imageUrl: expect.stringContaining('/product-'),
+        },
+        category: { name: 'ROLLOS' },
+      });
+      expect(byName.get('ROLL PHILADELPHIA')).toMatchObject({
+        variantGroup: 'ROLLOS',
+        shouldRecommend: false,
+        isActive: false,
+        sortOrder: 1,
+        product: { imageUrl: null },
+      });
+      expect(byName.get('AJENO')).toMatchObject({
+        product: { id: seed.foreignMenuItem.productId, imageUrl: ownPhoto },
+        category: { name: 'AJENOS' },
+      });
+
+      const categories = await dataSource
+        .getRepository(Category)
+        .find({ where: { restaurantId: seed.restaurantB.id } });
+      const lastExisting = Math.max(
+        ...categories
+          .filter((c) => !['ROLLOS', 'BEBIDAS FRÍAS'].includes(c.name))
+          .map((c) => c.sortOrder),
+      );
+      expect(categories.find((c) => c.name === 'ROLLOS')?.sortOrder).toBe(
+        lastExisting + 1,
+      );
+      expect(
+        categories.find((c) => c.name === 'BEBIDAS FRÍAS')?.sortOrder,
+      ).toBe(lastExisting + 2);
+    });
+
+    it('updates by name and keeps what is not in the file', async () => {
+      const token = await tokenFor(seed.clientB.email);
+      const productsBefore = await dataSource.getRepository(Product).count();
+
+      const preview = await upload(
+        'import/preview',
+        token,
+        'nombre,categoria,precio,activo\n' +
+          'roll   philadelphia,Rollos,140,sí\n' +
+          'Roll  Califórnia,Rollos,125,\n',
+      ).expect(200);
+      expect(
+        preview.body.rows.map((r: { action: string }) => r.action),
+      ).toEqual(['update', 'update']);
+
+      await upload(
+        'import',
+        token,
+        'nombre,categoria,precio,activo\n' +
+          'roll   philadelphia,Rollos,140,sí\n' +
+          'Roll  Califórnia,Rollos,125,\n',
+      ).expect(201);
+
+      const items = await itemsOf();
+      const byName = new Map(items.map((item) => [item.product.name, item]));
+
+      expect(await dataSource.getRepository(Product).count()).toBe(
+        productsBefore,
+      );
+      expect(byName.get('ROLL PHILADELPHIA')).toMatchObject({
+        price: '140.00',
+        isActive: true,
+        sortOrder: 0,
+      });
+      // Lo que no viene en la celda (o en el archivo) se queda igual.
+      expect(byName.get('ROLL CALIFORNIA')).toMatchObject({
+        price: '125.00',
+        variantGroup: 'ROLLOS',
+        shouldRecommend: true,
+        sortOrder: 1,
+        product: { description: 'CON AGUACATE' },
+      });
+      expect(byName.get('AGUA DE JAMAICA')).toMatchObject({ price: '35.00' });
+    });
+
+    it('warns when a new product looks like one that left the file', async () => {
+      const token = await tokenFor(seed.clientB.email);
+
+      const res = await upload(
+        'import/preview',
+        token,
+        'nombre,categoria,precio\n' +
+          'Roll Californias,Rollos,125\n' +
+          'Roll Philadelphia,Rollos,140\n',
+      ).expect(200);
+
+      expect(res.body.errors).toEqual([]);
+      expect(res.body.warnings).toEqual([
+        expect.objectContaining({
+          row: 2,
+          column: 'nombre',
+          message: expect.stringContaining('ROLL CALIFORNIA'),
+        }),
+      ]);
+    });
+
+    it('exports the menu in the format it imports', async () => {
+      const token = await tokenFor(seed.clientB.email);
+
+      const res = await http()
+        .get(`/v1/menus/menu/${menu.id}/export`)
+        .set(auth(token))
+        .buffer(true)
+        .parse((response, done) => {
+          const chunks: Buffer[] = [];
+          response.on('data', (chunk: Buffer) => chunks.push(chunk));
+          response.on('end', () => done(null, Buffer.concat(chunks)));
+        })
+        .expect(200);
+
+      expect(res.headers['content-type']).toContain('text/csv');
+      expect(res.headers['content-disposition']).toContain('-menu-csv.csv');
+
+      const text = (res.body as Buffer).toString('utf8');
+      const lines = text.split('\r\n');
+      expect(text.startsWith(BOM)).toBe(true);
+      expect(lines[0]).toBe(
+        `${BOM}nombre,descripcion,categoria,precio,familia,recomendado,activo,foto_url`,
+      );
+      expect(lines.slice(1, 5)).toEqual([
+        `AJENO,,AJENOS,99.00,,no,sí,${ownPhoto}`,
+        'ROLL PHILADELPHIA,,ROLLOS,140.00,ROLLOS,no,sí,',
+        expect.stringMatching(
+          /^ROLL CALIFORNIA,CON AGUACATE,ROLLOS,125\.00,ROLLOS,sí,sí,https:/,
+        ),
+        'AGUA DE JAMAICA,,BEBIDAS FRÍAS,35.00,,no,sí,',
+      ]);
+
+      // Lo exportado se vuelve a importar sin errores ni cambios de producto.
+      const again = await upload('import/preview', token, text).expect(200);
+      expect(again.body.errors).toEqual([]);
+      expect(again.body.summary).toMatchObject({
+        productsToCreate: 0,
+        productsToAdd: 0,
+        productsToUpdate: 4,
+        photosToCopy: 0,
+      });
+    });
+
+    it('another client cannot import or export it', async () => {
+      const other = await tokenFor(seed.clientA.email);
+      const file = 'nombre,categoria,precio\nTaco,Tacos,10\n';
+
+      await upload('import/preview', other, file).expect(403);
+      await upload('import', other, file).expect(403);
+      await http()
+        .get(`/v1/menus/menu/${menu.id}/export`)
+        .set(auth(other))
+        .expect(403);
+    });
+
+    it('rejects files that are not text', async () => {
+      const token = await tokenFor(seed.clientB.email);
+
+      await http()
+        .post(`/v1/menus/menu/${menu.id}/import/preview`)
+        .set(auth(token))
+        .attach('file', Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]), {
+          filename: 'menu.csv',
+          contentType: 'text/csv',
+        })
+        .expect(400);
     });
   });
 });

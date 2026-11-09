@@ -17,9 +17,15 @@ import { FindMenuItemsUseCase } from '@/modules/menus/use-cases/menu-items/find-
 import { FindOneMenuItemUseCase } from '@/modules/menus/use-cases/menu-items/find-one-menu-item.usecase';
 import { UpdateMenuItemUseCase } from '@/modules/menus/use-cases/menu-items/update-menu-item.usecase';
 import { RemoveMenuItemUseCase } from '@/modules/menus/use-cases/menu-items/remove-menu-item.usecase';
+import { MenuCsvController } from '@/modules/menus/menu-csv.controller';
+import { MenuPhotoService } from '@/modules/menus/csv/menu-photo.service';
+import { PlanMenuImportUseCase } from '@/modules/menus/use-cases/menu-csv/plan-menu-import.usecase';
+import { PreviewMenuImportUseCase } from '@/modules/menus/use-cases/menu-csv/preview-menu-import.usecase';
+import { ImportMenuUseCase } from '@/modules/menus/use-cases/menu-csv/import-menu.usecase';
+import { ExportMenuUseCase } from '@/modules/menus/use-cases/menu-csv/export-menu.usecase';
 
 @Module({
-  controllers: [MenusController],
+  controllers: [MenusController, MenuCsvController],
   providers: [
     MenusService,
     CreateMenuUseCase,
@@ -33,6 +39,11 @@ import { RemoveMenuItemUseCase } from '@/modules/menus/use-cases/menu-items/remo
     FindOneMenuItemUseCase,
     UpdateMenuItemUseCase,
     RemoveMenuItemUseCase,
+    MenuPhotoService,
+    PlanMenuImportUseCase,
+    PreviewMenuImportUseCase,
+    ImportMenuUseCase,
+    ExportMenuUseCase,
   ],
   imports: [
     TypeOrmModule.forFeature([Menu, MenuItem]),

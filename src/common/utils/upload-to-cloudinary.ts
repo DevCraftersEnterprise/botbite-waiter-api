@@ -51,6 +51,34 @@ export const uploadPictureToCloudinary = (
     allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
   });
 
+/**
+ * Copia una imagen pública a Cloudinary. La descarga la hace Cloudinary, no
+ * este servidor, así que una URL interna de la red no queda expuesta.
+ */
+export const uploadRemotePictureToCloudinary = async (
+  url: string,
+  folder: string,
+  fileName: string,
+): Promise<string> => {
+  const result = await getCloudinary().uploader.upload(url, {
+    folder,
+    public_id: fileName,
+    overwrite: true,
+    resource_type: 'image',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    timeout: 30_000,
+  });
+  return result.secure_url;
+};
+
+/** Las imágenes que ya están en la cuenta de Cloudinary de BotBite. */
+export const isOwnCloudinaryUrl = (url: string): boolean => {
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  return (
+    !!cloudName && url.startsWith(`https://res.cloudinary.com/${cloudName}/`)
+  );
+};
+
 export const cloudinaryFolder = (path: string) =>
   process.env.NODE_ENV === 'production'
     ? `botbite/${path}`

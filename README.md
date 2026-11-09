@@ -184,6 +184,16 @@ El control de acceso está centralizado en [`AccessControlService`](src/core/acc
 
 Las cuentas `user` las crea un admin (`POST /v1/users/register-user`).
 
+**Menú por CSV** (dueño o admin), un menú de sucursal por archivo:
+
+| Método | Ruta | Uso |
+| --- | --- | --- |
+| `POST` | `/v1/menus/menu/:menuId/import/preview` | Qué se crearía y actualizaría, y los errores por fila y columna. No guarda nada |
+| `POST` | `/v1/menus/menu/:menuId/import` | Guarda todo en una transacción; con un error, nada. Luego copia las fotos y avisa al mesero una vez |
+| `GET` | `/v1/menus/menu/:menuId/export` | El menú en el mismo formato (UTF-8 con BOM) |
+
+Columnas: `nombre, descripcion, categoria, precio, familia, recomendado, activo, foto_url`; `nombre`, `categoria` y `precio` son obligatorias. Acepta UTF-8 o Windows-1252, `,` o `;` y hasta 1,000 filas. El producto se busca por nombre sin distinguir acentos ni mayúsculas, y una celda vacía no cambia el valor. Las fotos (solo https) las descarga Cloudinary; si una falla, el producto se guarda sin ella.
+
 **WebSocket:** la conexión requiere el access token.
 
 ```ts
