@@ -117,6 +117,22 @@ export const orderingPaidMessage = (
     .join('\n');
 };
 
+/** Al cancelar un pedido pagado: caja hace el reembolso mientras el bot no lo haga solo. */
+export const paidOrderCancelledMessage = (
+  order: Order,
+  payment: Payment | null,
+): string => {
+  const what =
+    order.type === OrderType.DELIVERY
+      ? 'pedido a domicilio'
+      : 'pedido para recoger';
+  const by = order.customerName ? ` de ${order.customerName}` : '';
+
+  return payment
+    ? `❌ Se canceló el ${what}${by}. Reembolsa ${money(payment.paidAmount)} en Mercado Pago (operación ${payment.providerPaymentId}).`
+    : `❌ Se canceló el ${what}${by}, pero no se encontró su pago. Revísalo en Mercado Pago.`;
+};
+
 export const incompletePaymentMessage = (
   order: Order,
   payment: Payment,

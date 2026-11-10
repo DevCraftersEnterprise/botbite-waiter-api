@@ -4320,6 +4320,180 @@ describe('BotBite API (e2e)', () => {
       );
     });
   });
+  describe('cancelling paid orders', () => {
+    const PHONE = '5215533330002';
+    let botKey: string;
+    let emitSpy: jest.SpyInstance;
+
+    const bot = () => ({ 'X-BotBite-Key': botKey });
+    const orderOf = (code: string) =>
+      dataSource.getRepository(Order).findOneByOrFail({ code });
+    const membership = async () => {
+      const customer = await dataSource
+        .getRepository(Customer)
+        .findOneByOrFail({ phone: `+${PHONE}` });
+      return dataSource.getRepository(RestaurantCustomer).findOneByOrFail({
+        customerId: customer.id,
+        restaurantId: seed.restaurantA.id,
+      });
+    };
+    const balance = async () => Number((await membership()).walletBalance);
+    const setBalance = async (walletBalance: number) => {
+      const { id } = await membership();
+      await dataSource
+        .getRepository(RestaurantCustomer)
+        .update({ id }, { walletBalance });
+    };
+    const cancelPaid = (id: string, token: string) =>
+      http().post(`/v1/orders/${id}/cancel-paid`).set(auth(token)).send();
+
+    /** Pedido para recoger pagado, usando `wallet` de saldo. */
+    const paidPickup = async (code: string, wallet: number) => {
+      await http()
+        .post('/v1/bot/orders')
+        .set(bot())
+        .send({
+          code,
+          type: 'pickup',
+          phone: PHONE,
+          customerName: 'Luis',
+          items: [{ menuItemId: seed.menuItem.id, quantity: 3 }],
+        })
+        .expect(201);
+      await setBalance(wallet);
+      const link = await http()
+        .patch(`/v1/bot/orders/${code}`)
+        .set(bot())
+        .send({ status: 'payment_link', walletUse: 'all' })
+        .expect(200);
+      const amountDue = (link.body.order as { amountDue: number }).amountDue;
+      const paid = await http()
+        .post('/v1/bot/payments')
+        .set(bot())
+        .send({
+          orderCode: code,
+          providerPaymentId: `MP-${code}`,
+          amount: amountDue,
+        })
+        .expect(201);
+      return {
+        order: await orderOf(code),
+        amountDue,
+        cashback: paid.body.cashback as number,
+      };
+    };
+
+    beforeAll(async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      const created = await http()
+        .post(`/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/bot-keys`)
+        .set(auth(admin))
+        .send({ name: 'cancelaciones' })
+        .expect(201);
+      botKey = created.body.secret as string;
+      emitSpy = jest.spyOn(app.get(BotEventsService), 'emit');
+    });
+
+    afterAll(() => emitSpy.mockRestore());
+
+    it('returns the wallet, takes back the cashback and tells the cashier and the bot', async () => {
+      const { order, amountDue, cashback } = await paidPickup('CAN-0001', 10);
+      expect(cashback).toBeGreaterThan(0);
+      // Le quedó el cashback; lo usado ya se descontó.
+      expect(await balance()).toBeCloseTo(cashback, 2);
+
+      emitSpy.mockClear();
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await cancelPaid(order.id, owner).expect(200);
+
+      expect(res.body).toMatchObject({
+        order: {
+          status: 'cancelled',
+          fulfillmentStatus: 'cancelled',
+          walletDiscount: 10,
+        },
+        refundAmount: amountDue,
+        providerPaymentId: 'MP-CAN-0001',
+      });
+      // Vuelven los 10 usados y se va el cashback.
+      expect(await balance()).toBeCloseTo(10, 2);
+
+      const alert = await dataSource
+        .getRepository(CashierNotification)
+        .findOneByOrFail({ orderId: order.id, type: NotificationType.ALERT });
+      expect(alert.message).toContain(
+        'Se canceló el pedido para recoger de Luis',
+      );
+      expect(alert.message).toContain(`Reembolsa $${amountDue.toFixed(2)}`);
+
+      const cancelled = (emitSpy.mock.calls as unknown[][]).filter(
+        ([, type]) => type === 'order.cancelled',
+      );
+      expect(cancelled).toEqual([
+        [
+          seed.branchA.id,
+          'order.cancelled',
+          expect.objectContaining({
+            orderCode: 'CAN-0001',
+            orderType: 'pickup',
+            refundAmount: amountDue,
+            providerPaymentId: 'MP-CAN-0001',
+            phone: `+${PHONE}`,
+          }),
+        ],
+      ]);
+
+      await cancelPaid(order.id, owner).expect(409);
+      const toDeliver = await http()
+        .get(`/v1/orders/to-deliver?branchId=${seed.branchA.id}`)
+        .set(auth(owner))
+        .expect(200);
+      expect(
+        toDeliver.body.orders.map((o: { code: string }) => o.code),
+      ).not.toContain('CAN-0001');
+    });
+
+    it('never leaves the wallet below zero', async () => {
+      const { order, cashback } = await paidPickup('CAN-0002', 0);
+      // Ya se gastó el cashback.
+      await setBalance(cashback / 2);
+
+      const admin = await tokenFor(seed.superUser.email);
+      await cancelPaid(order.id, admin).expect(200);
+      expect(await balance()).toBe(0);
+    });
+
+    it('only cancels paid orders that were not delivered, for their owner', async () => {
+      const { order } = await paidPickup('CAN-0003', 0);
+      const otherOwner = await tokenFor(seed.clientB.email);
+      await cancelPaid(order.id, otherOwner).expect(403);
+
+      const owner = await tokenFor(seed.clientA.email);
+      await http()
+        .patch(`/v1/orders/${order.id}/fulfillment`)
+        .set(auth(owner))
+        .send({ status: 'ready' })
+        .expect(200);
+      await http()
+        .patch(`/v1/orders/${order.id}/fulfillment`)
+        .set(auth(owner))
+        .send({ status: 'delivered' })
+        .expect(200);
+      await cancelPaid(order.id, owner).expect(409);
+
+      const unpaid = await http()
+        .post('/v1/bot/orders')
+        .set(bot())
+        .send({
+          code: 'CAN-0004',
+          type: 'pickup',
+          phone: PHONE,
+          items: [{ menuItemId: seed.menuItem.id, quantity: 1 }],
+        })
+        .expect(201);
+      await cancelPaid(unpaid.body.order.id as string, owner).expect(409);
+    });
+  });
 });
 
 async function seedData(dataSource: DataSource): Promise<Seed> {

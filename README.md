@@ -152,9 +152,11 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 
 **Para entregar:** `GET /v1/orders/to-deliver?branchId=<id>` devuelve los pedidos pagados que faltan por entregar, con la dirección y el teléfono del cliente: primero los programados por su hora y los demás por la hora de pago. `PATCH /v1/orders/:id/fulfillment` con `{ status }` los avanza y le avisa al bot. Los ven el dueño, los admins y el personal de la sucursal.
 
+**Cancelar un pedido pagado:** `POST /v1/orders/:id/cancel-paid`, solo el dueño o un admin, mientras no se haya entregado. Devuelve el saldo que se usó, quita el cashback ganado (sin dejar el monedero en negativo), manda una alerta a caja con el monto a reembolsar y avisa al bot con `order.cancelled`. Por ahora el reembolso en Mercado Pago se hace a mano; los totales del pedido no cambian.
+
 **Cobros en el panel:** `GET /v1/orders/billing?branchId=<id>&date=YYYY-MM-DD` devuelve los pagos en línea y las facturas de un día en la zona horaria de la sucursal; sin `date`, los de hoy. La ven el dueño, los admins y el personal de la sucursal.
 
-**Avisos al mesero:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, restaurantSlug, branchSlug, occurredAt, data }`. Si `botBaseUrl` trae query (por ejemplo `?negocio=punto-de-union`), se conserva: `https://mesero/portal-evento?negocio=punto-de-union`. Los tipos son `round.status_changed`, `order.closed`, `order.fulfillment_changed` y `catalog.changed`. `order.fulfillment_changed` sale cuando caja mueve un pedido en "Para entregar" (no cuando lo mueve el bot), con `orderCode`, `orderType`, `fulfillmentStatus`, `language` y `phone`. Este último sale al cambiar productos, menús o categorías y al guardar el Mesero digital, la sucursal o el restaurante; no trae datos, así que el mesero vuelve a leer `GET /v1/bot/branch`. Son de mejor esfuerzo: se reintentan y, si el mesero no responde, solo se registra.
+**Avisos al mesero:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, restaurantSlug, branchSlug, occurredAt, data }`. Si `botBaseUrl` trae query (por ejemplo `?negocio=punto-de-union`), se conserva: `https://mesero/portal-evento?negocio=punto-de-union`. Los tipos son `round.status_changed`, `order.closed`, `order.fulfillment_changed`, `order.cancelled` y `catalog.changed`. `order.cancelled` sale cuando el dueño cancela un pedido pagado, con `orderCode`, `orderType`, `language`, `phone`, `refundAmount` y `providerPaymentId`. `order.fulfillment_changed` sale cuando caja mueve un pedido en "Para entregar" (no cuando lo mueve el bot), con `orderCode`, `orderType`, `fulfillmentStatus`, `language` y `phone`. Este último sale al cambiar productos, menús o categorías y al guardar el Mesero digital, la sucursal o el restaurante; no trae datos, así que el mesero vuelve a leer `GET /v1/bot/branch`. Son de mejor esfuerzo: se reintentan y, si el mesero no responde, solo se registra.
 
 Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<cuerpo>` con `BOT_WEBHOOK_SECRET` y lo compara con `X-BotBite-Signature: sha256=<hex>`.
 
@@ -251,6 +253,7 @@ Las e2e levantan la app completa contra Postgres real. Cubren:
 - configuración del mesero, llaves y `GET /v1/bot/branch`;
 - ajustes del modo pedidos, sus permisos y el interruptor "Recibiendo pedidos";
 - pedidos de recoger y domicilio: monedero, pago con envío, "Para entregar", cancelación sin pagar y borrado de direcciones;
+- cancelación de pedidos pagados: saldo, cashback, alerta a caja y aviso al bot;
 - cuentas, rondas y sus estados, con carga simultánea y reintentos;
 - avisos firmados al mesero, contra un servidor local;
 - notificaciones;
