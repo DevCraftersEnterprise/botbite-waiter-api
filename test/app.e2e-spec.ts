@@ -4444,6 +4444,35 @@ describe('BotBite API (e2e)', () => {
       ]);
 
       await cancelPaid(order.id, owner).expect(409);
+
+      // En Cobros sigue el pago, marcado para reembolsar y con su tipo.
+      const billing = await http()
+        .get(`/v1/orders/billing?branchId=${seed.branchA.id}`)
+        .set(auth(owner))
+        .expect(200);
+      const payments = billing.body.payments as {
+        providerPaymentId: string;
+        status: string;
+        orderType: string | null;
+        toRefund: boolean;
+      }[];
+      expect(
+        payments.find((p) => p.providerPaymentId === 'MP-CAN-0001'),
+      ).toMatchObject({
+        status: 'approved',
+        orderType: 'pickup',
+        toRefund: true,
+      });
+      expect(
+        payments.filter((p) => p.toRefund).map((p) => p.providerPaymentId),
+      ).toEqual(['MP-CAN-0001']);
+      expect(
+        payments.find((p) => p.providerPaymentId === 'MP-PED-0001'),
+      ).toMatchObject({
+        orderType: 'delivery',
+        toRefund: false,
+      });
+
       const toDeliver = await http()
         .get(`/v1/orders/to-deliver?branchId=${seed.branchA.id}`)
         .set(auth(owner))
