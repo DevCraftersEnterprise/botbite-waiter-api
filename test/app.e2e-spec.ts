@@ -4287,6 +4287,46 @@ describe('BotBite API (e2e)', () => {
       expect((await orderOf('PED-0003')).status).toBe(OrderStatus.OPEN);
     });
 
+    it('counts pickup and delivery orders in the day only once they are paid', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const summary = async () =>
+        (
+          await http()
+            .get(`/v1/orders/summary?branchId=${seed.branchA.id}`)
+            .set(auth(owner))
+            .expect(200)
+        ).body as { accounts: number; openAccounts: number };
+
+      const before = await summary();
+      await openOrder({
+        code: 'PED-0005',
+        type: 'pickup',
+        phone: PHONE,
+        items: items(),
+      }).expect(201);
+      // Sin pagar no es una cuenta del día ni una mesa abierta.
+      expect(await summary()).toMatchObject(before);
+
+      const link = await http()
+        .patch(`${ORDERS_URL}/PED-0005`)
+        .set(bot())
+        .send({ status: 'payment_link' })
+        .expect(200);
+      await http()
+        .post('/v1/bot/payments')
+        .set(bot())
+        .send({
+          orderCode: 'PED-0005',
+          providerPaymentId: 'MP-PED-0005',
+          amount: (link.body.order as OrderBody).amountDue,
+        })
+        .expect(201);
+
+      const paid = await summary();
+      expect(paid.accounts).toBe(before.accounts + 1);
+      expect(paid.openAccounts).toBe(before.openAccounts);
+    });
+
     it('erases delivery addresses 30 days after the last change', async () => {
       await openOrder({
         code: 'PED-0004',
