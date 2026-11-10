@@ -6,10 +6,12 @@ import {
   JoinColumn,
   ManyToOne,
   OneToMany,
+  OneToOne,
 } from 'typeorm';
 import { BaseEntity } from '@/common/database/base.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
+import { BranchOrdering } from '@/modules/ordering/entities/branch-ordering.entity';
 
 /** Funciones del mesero que contrata cada sucursal. */
 export interface BranchFeatures {
@@ -123,4 +125,8 @@ export class Branch extends BaseEntity {
 
   @OneToMany(() => Menu, (menu) => menu.branch)
   menus: Menu[];
+
+  /** Solo existe si la sucursal configuró el modo pedidos. */
+  @OneToOne(() => BranchOrdering, (ordering) => ordering.branch)
+  ordering?: BranchOrdering | null;
 }

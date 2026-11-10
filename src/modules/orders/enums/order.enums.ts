@@ -25,6 +25,17 @@ export const ACTIVE_ORDER_STATUSES = [
   OrderStatus.WITH_WAITER,
 ];
 
+/** Cómo recibe el cliente su pedido. */
+export enum OrderType {
+  /** En el restaurante, con el mesero. */
+  DINE_IN = 'dine_in',
+  PICKUP = 'pickup',
+  DELIVERY = 'delivery',
+}
+
+/** Los tipos que atiende el número de pedidos. */
+export const ORDERING_TYPES = [OrderType.PICKUP, OrderType.DELIVERY] as const;
+
 export enum OrderSource {
   WHATSAPP = 'whatsapp',
   /** La abrió el personal desde el panel. */
