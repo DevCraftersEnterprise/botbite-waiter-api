@@ -167,6 +167,26 @@ export class OrdersController {
     return { order: toOrderView(order) };
   }
 
+  /**
+   * Cancela un pedido de recoger o domicilio pagado y sin entregar. Solo el
+   * dueño o un admin: implica devolver dinero.
+   */
+  @Post(':id/cancel-paid')
+  @HttpCode(HttpStatus.OK)
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
+  async cancelPaid(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: User,
+  ) {
+    await this.accessControl.assertOrderAccess(user, id);
+    const { order, payment } = await this.accounts.cancelPaidOrder(id);
+    return {
+      order: toOrderView(order),
+      refundAmount: payment ? Number(payment.paidAmount) : 0,
+      providerPaymentId: payment?.providerPaymentId ?? null,
+    };
+  }
+
   @Post(':id/settle')
   @HttpCode(HttpStatus.OK)
   @Auth(ORDER_ROLES)

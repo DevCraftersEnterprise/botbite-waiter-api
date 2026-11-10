@@ -18,7 +18,8 @@ export type BotEventType =
   | 'catalog.changed'
   | 'round.status_changed'
   | 'order.closed'
-  | 'order.fulfillment_changed';
+  | 'order.fulfillment_changed'
+  | 'order.cancelled';
 
 export interface CatalogScope {
   branchId?: string;

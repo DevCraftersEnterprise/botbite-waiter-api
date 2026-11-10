@@ -26,19 +26,23 @@ import { NotificationsService } from '@/modules/notifications/notifications.serv
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
+import { Payment } from '@/modules/orders/entities/payment.entity';
 import { BranchOrdering } from '@/modules/ordering/entities/branch-ordering.entity';
 import {
   ACTIVE_ORDER_STATUSES,
   FulfillmentStatus,
+  OPEN_FULFILLMENT_STATUSES,
   OrderSource,
   OrderStatus,
   OrderType,
   PaymentMethod,
+  PaymentStatus,
   RoundStatus,
 } from '@/modules/orders/enums/order.enums';
 import {
   billMessage,
   dailyCloseMessage,
+  paidOrderCancelledMessage,
   payWithWaiterMessage,
   roundMessage,
 } from '@/modules/orders/utils/order-messages.util';
@@ -91,6 +95,12 @@ export interface BotOrderUpdate {
   walletUse?: WalletUse;
   walletAmount?: number;
   tip?: number;
+}
+
+export interface CancelPaidResult {
+  order: Order;
+  /** El pago a reembolsar. null si no se encontró. */
+  payment: Payment | null;
 }
 
 export interface BotOrderResult {
@@ -584,6 +594,64 @@ export class OrderAccountsService {
   }
 
   /**
+   * El dueño cancela un pedido de recoger o domicilio ya pagado y sin entregar.
+   * Devuelve el saldo que se usó, quita el cashback que ganó (sin dejar el saldo
+   * en negativo) y avisa a caja y al bot. El reembolso en Mercado Pago lo hace
+   * caja a mano mientras el bot no lo haga solo.
+   */
+  async cancelPaidOrder(orderId: string): Promise<CancelPaidResult> {
+    const result = await this.dataSource.transaction(async (manager) => {
+      const locked = await this.lockOrder(manager, { id: orderId });
+
+      if (
+        locked.type === OrderType.DINE_IN ||
+        locked.status !== OrderStatus.PAID ||
+        !locked.fulfillmentStatus ||
+        !OPEN_FULFILLMENT_STATUSES.includes(locked.fulfillmentStatus)
+      ) {
+        throw new ConflictException(
+          'Only paid pickup and delivery orders that were not delivered can be cancelled',
+        );
+      }
+
+      const payment = await manager.findOne(Payment, {
+        where: { orderId: locked.id, status: PaymentStatus.APPROVED },
+        order: { paidAt: 'DESC' },
+      });
+
+      await this.undoWallet(manager, locked, payment);
+
+      locked.status = OrderStatus.CANCELLED;
+      locked.fulfillmentStatus = FulfillmentStatus.CANCELLED;
+      locked.fulfillmentUpdatedAt = new Date();
+
+      return { order: await manager.save(locked), payment };
+    });
+
+    const { order, payment } = result;
+    const phone = await this.customers.phoneOf(order.customerId);
+
+    await this.notificationsService.create({
+      branchId: order.branchId,
+      type: NotificationType.ALERT,
+      message: paidOrderCancelledMessage(order, payment),
+      phoneNumber: phone ?? undefined,
+      orderId: order.id,
+    });
+    this.ordersGateway.emitOrderUpdate(order.branchId);
+    this.botEventsService.emit(order.branchId, 'order.cancelled', {
+      orderCode: order.code,
+      orderType: order.type,
+      language: order.language,
+      phone,
+      refundAmount: payment ? Number(payment.paidAmount) : 0,
+      providerPaymentId: payment?.providerPaymentId ?? null,
+    });
+
+    return result;
+  }
+
+  /**
    * Cierre diario: el mesero borra esa noche las sesiones, así que nadie pedirá esas
    * cuentas. Solo las de WhatsApp sin cuenta pedida: las que ya tienen un cobro en
    * curso y las del personal las cierra caja.
@@ -738,6 +806,48 @@ export class OrderAccountsService {
     }
 
     return wanted > balance;
+  }
+
+  /**
+   * Deshace lo que el pedido movió en el monedero. Los totales del pedido no
+   * cambian: siguen diciendo lo que se cobró.
+   */
+  private async undoWallet(
+    manager: EntityManager,
+    order: Order,
+    payment: Payment | null,
+  ): Promise<void> {
+    if (!order.customerId) return;
+
+    const used = toCents(order.walletDiscount);
+    const earned = payment ? toCents(payment.cashbackEarned) : 0;
+    if (used <= 0 && earned <= 0) return;
+
+    const membership = await this.customers.lockMembership(
+      manager,
+      order.branchId,
+      order.customerId,
+    );
+
+    if (used > 0) {
+      await this.customers.moveWallet(manager, membership, {
+        type: WalletMovementType.ADJUSTMENT,
+        cents: used,
+        orderId: order.id,
+        note: 'Pedido cancelado: saldo usado',
+      });
+    }
+
+    // Si ya gastó el cashback, se quita lo que quede: nunca queda en negativo.
+    const clawback = Math.min(earned, toCents(membership.walletBalance));
+    if (clawback > 0) {
+      await this.customers.moveWallet(manager, membership, {
+        type: WalletMovementType.ADJUSTMENT,
+        cents: -clawback,
+        orderId: order.id,
+        note: 'Pedido cancelado: cashback',
+      });
+    }
   }
 
   /** Regresa al monedero saldo que ya se había descontado de la cuenta. */
