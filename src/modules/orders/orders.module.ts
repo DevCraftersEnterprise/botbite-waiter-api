@@ -13,6 +13,7 @@ import { OrdersService } from '@/modules/orders/orders.service';
 import { OrderAccountsService } from '@/modules/orders/services/order-accounts.service';
 import { OrderInvoicesService } from '@/modules/orders/services/order-invoices.service';
 import { OrderPaymentsService } from '@/modules/orders/services/order-payments.service';
+import { OrderingPrivacyService } from '@/modules/orders/services/ordering-privacy.service';
 
 @Module({
   controllers: [OrdersController],
@@ -21,6 +22,7 @@ import { OrderPaymentsService } from '@/modules/orders/services/order-payments.s
     OrderAccountsService,
     OrderPaymentsService,
     OrderInvoicesService,
+    OrderingPrivacyService,
   ],
   imports: [
     TypeOrmModule.forFeature([Order, OrderItem, OrderRound, Payment, Invoice]),

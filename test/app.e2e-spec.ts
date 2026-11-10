@@ -36,7 +36,14 @@ import { Invoice } from '@/modules/orders/entities/invoice.entity';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
-import { OrderStatus, RoundStatus } from '@/modules/orders/enums/order.enums';
+import {
+  FulfillmentStatus,
+  OrderStatus,
+  OrderType,
+  RoundStatus,
+} from '@/modules/orders/enums/order.enums';
+import { OrderingPrivacyService } from '@/modules/orders/services/ordering-privacy.service';
+import { BranchOrdering } from '@/modules/ordering/entities/branch-ordering.entity';
 import { Payment } from '@/modules/orders/entities/payment.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
@@ -1378,9 +1385,11 @@ describe('BotBite API (e2e)', () => {
       const code = nextCode();
       await openAccount(code).expect(201);
 
-      for (const status of ['paid', 'settled', 'cancelled', 'open']) {
+      for (const status of ['paid', 'settled', 'open']) {
         await setStatus(code, status).expect(400);
       }
+      // `cancelled` es solo para pedidos sin pagar; una cuenta de mesa la cancela caja.
+      await setStatus(code, 'cancelled').expect(409);
     });
 
     it('the panel sees active accounts and moves the rounds', async () => {
@@ -3889,6 +3898,426 @@ describe('BotBite API (e2e)', () => {
         .set('X-BotBite-Key', botKeyA)
         .send({ accepting: 'no' })
         .expect(400);
+    });
+  });
+  describe('pickup and delivery orders', () => {
+    interface OrderBody {
+      id: string;
+      status: string;
+      subtotal: number;
+      total: number;
+      walletDiscount: number;
+      amountDue: number;
+    }
+    const ORDERS_URL = '/v1/bot/orders';
+    const PHONE = '5215533330001';
+    let botKey: string;
+    let emitSpy: jest.SpyInstance;
+
+    const bot = () => ({ 'X-BotBite-Key': botKey });
+    const inAnHour = () => new Date(Date.now() + 60 * 60_000).toISOString();
+    const delivery = {
+      address: 'Calle 5 de Febrero 123, Centro',
+      references: 'Portón negro',
+      latitude: '27.4912001',
+      longitude: -109.9381,
+      fee: 42,
+    };
+    const items = () => [
+      { menuItemId: seed.menuItem.id, quantity: 2, note: 'sin cebolla' },
+    ];
+    const openOrder = (body: object) =>
+      http().post(ORDERS_URL).set(bot()).send(body);
+    const orderOf = (code: string) =>
+      dataSource.getRepository(Order).findOneByOrFail({ code });
+    const membership = async () => {
+      const customer = await dataSource
+        .getRepository(Customer)
+        .findOneByOrFail({ phone: `+${PHONE}` });
+      return dataSource.getRepository(RestaurantCustomer).findOneByOrFail({
+        customerId: customer.id,
+        restaurantId: seed.restaurantA.id,
+      });
+    };
+    const giveWallet = async (walletBalance: number) => {
+      const { id } = await membership();
+      await dataSource
+        .getRepository(RestaurantCustomer)
+        .update({ id }, { walletBalance });
+    };
+    const notificationsOf = (orderId: string) =>
+      dataSource.getRepository(CashierNotification).find({
+        where: { orderId },
+        order: { createdAt: 'ASC' },
+      });
+    const panelUrl = (path: string) => `/v1/orders/${path}`;
+
+    beforeAll(async () => {
+      await dataSource
+        .getRepository(BranchOrdering)
+        .update(
+          { branchId: seed.branchA.id },
+          { enabled: true, types: [OrderType.PICKUP, OrderType.DELIVERY] },
+        );
+      await dataSource
+        .getRepository(Restaurant)
+        .update({ id: seed.restaurantA.id }, { walletPct: 10 });
+      const branch = await dataSource
+        .getRepository(Branch)
+        .findOneByOrFail({ id: seed.branchA.id });
+      await dataSource
+        .getRepository(Branch)
+        .update(
+          { id: seed.branchA.id },
+          { features: { ...branch.features, wallet: true } },
+        );
+
+      const admin = await tokenFor(seed.superUser.email);
+      const created = await http()
+        .post(`/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/bot-keys`)
+        .set(auth(admin))
+        .send({ name: 'pedidos' })
+        .expect(201);
+      botKey = created.body.secret as string;
+      emitSpy = jest.spyOn(app.get(BotEventsService), 'emit');
+    });
+
+    afterAll(() => emitSpy.mockRestore());
+
+    it('opens a delivery order without telling the cashier yet', async () => {
+      const scheduledFor = inAnHour();
+      const res = await openOrder({
+        code: 'PED-0001',
+        type: 'delivery',
+        phone: PHONE,
+        customerName: 'Ana',
+        scheduledFor,
+        delivery,
+        commissionPct: 0.5,
+        items: items(),
+      }).expect(201);
+
+      const order = res.body.order as OrderBody;
+      expect(order).toMatchObject({
+        type: 'delivery',
+        status: 'open',
+        table: null,
+        fulfillmentStatus: null,
+        scheduledFor,
+        deliveryFee: 42,
+        commissionPct: 0.5,
+        delivery: {
+          address: delivery.address,
+          references: 'Portón negro',
+          latitude: 27.4912,
+          longitude: -109.9381,
+        },
+      });
+      expect(order.amountDue).toBeCloseTo(order.subtotal + 42, 2);
+
+      // Reintento: no duplica nada.
+      await openOrder({
+        code: 'PED-0001',
+        type: 'delivery',
+        phone: PHONE,
+        delivery,
+        items: items(),
+      }).expect(200);
+
+      expect(await notificationsOf(order.id)).toHaveLength(0);
+      // Existe el cliente, pero la visita se cuenta al pagar.
+      expect((await membership()).visits).toBe(0);
+
+      const owner = await tokenFor(seed.clientA.email);
+      const active = await http()
+        .get(panelUrl(`active?branchId=${seed.branchA.id}`))
+        .set(auth(owner))
+        .expect(200);
+      expect(
+        active.body.orders.map((o: { code: string }) => o.code),
+      ).not.toContain('PED-0001');
+      const toDeliver = await http()
+        .get(panelUrl(`to-deliver?branchId=${seed.branchA.id}`))
+        .set(auth(owner))
+        .expect(200);
+      expect(toDeliver.body.total).toBe(0);
+    });
+
+    it('rejects orders that do not fit their type or the branch', async () => {
+      const base = { phone: PHONE, items: items() };
+      for (const body of [
+        { ...base, code: 'BAD-0001', type: 'pickup', delivery },
+        { ...base, code: 'BAD-0002', type: 'delivery' },
+        {
+          ...base,
+          code: 'BAD-0003',
+          type: 'dine_in',
+          table: '1',
+          scheduledFor: inAnHour(),
+        },
+        { ...base, code: 'BAD-0004', type: 'dine_in' },
+        { ...base, code: 'BAD-0005', type: 'takeout' },
+      ]) {
+        await openOrder(body).expect(400);
+      }
+
+      await dataSource
+        .getRepository(BranchOrdering)
+        .update({ branchId: seed.branchA.id }, { types: [OrderType.DELIVERY] });
+      await openOrder({ ...base, code: 'BAD-0006', type: 'pickup' }).expect(
+        400,
+      );
+      await dataSource
+        .getRepository(BranchOrdering)
+        .update({ branchId: seed.branchA.id }, { enabled: false });
+      await openOrder({
+        ...base,
+        code: 'BAD-0007',
+        type: 'delivery',
+        delivery,
+      }).expect(409);
+      await dataSource
+        .getRepository(BranchOrdering)
+        .update(
+          { branchId: seed.branchA.id },
+          { enabled: true, types: [OrderType.PICKUP, OrderType.DELIVERY] },
+        );
+    });
+
+    it('uses the wallet with the link and charges the delivery fee', async () => {
+      await giveWallet(20);
+      const link = await http()
+        .patch(`${ORDERS_URL}/PED-0001`)
+        .set(bot())
+        .send({ status: 'payment_link', walletUse: 'all' })
+        .expect(200);
+
+      const order = link.body.order as OrderBody;
+      expect(order.status).toBe('payment_link');
+      expect(order.walletDiscount).toBe(20);
+      expect(order.total).toBeCloseTo(order.subtotal - 20, 2);
+      expect(order.amountDue).toBeCloseTo(order.total + 42, 2);
+      expect(link.body.walletBalance).toBe(0);
+      expect(await notificationsOf(order.id)).toHaveLength(0);
+
+      const paid = await http()
+        .post('/v1/bot/payments')
+        .set(bot())
+        .send({
+          orderCode: 'PED-0001',
+          providerPaymentId: 'MP-PED-0001',
+          amount: order.amountDue,
+        })
+        .expect(201);
+
+      expect(paid.body.status).toBe('approved');
+      // 10 % del consumo, sin el envío.
+      expect(paid.body.cashback).toBeCloseTo(
+        Math.round(order.total * 10) / 100,
+        2,
+      );
+
+      const saved = await orderOf('PED-0001');
+      expect(saved.status).toBe(OrderStatus.PAID);
+      expect(saved.fulfillmentStatus).toBe(FulfillmentStatus.PENDING);
+      expect((await membership()).visits).toBe(1);
+
+      const [notice] = await notificationsOf(saved.id);
+      expect(notice.type).toBe(NotificationType.ORDER);
+      expect(notice.message).toContain('Pedido a domicilio pagado de Ana');
+      expect(notice.message).toContain('⏰ Programado para');
+      expect(notice.message).toContain('envío $42.00');
+      expect(notice.message).not.toContain('Calle 5');
+    });
+
+    it('lists paid orders to deliver, with the address, outside Orders', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .get(panelUrl(`to-deliver?branchId=${seed.branchA.id}`))
+        .set(auth(owner))
+        .expect(200);
+
+      expect(res.body.total).toBe(1);
+      expect(res.body.orders[0]).toMatchObject({
+        code: 'PED-0001',
+        type: 'delivery',
+        fulfillmentStatus: 'pending',
+        phone: `+${PHONE}`,
+        delivery: { address: delivery.address },
+      });
+      expect(res.body.orders[0].rounds[0].items).toHaveLength(1);
+
+      const otherOwner = await tokenFor(seed.clientB.email);
+      await http()
+        .get(panelUrl(`to-deliver?branchId=${seed.branchA.id}`))
+        .set(auth(otherOwner))
+        .expect(403);
+    });
+
+    it('moves the delivery from the panel and the bot, telling the bot only of panel changes', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const { id } = await orderOf('PED-0001');
+      const move = (status: string) =>
+        http()
+          .patch(panelUrl(`${id}/fulfillment`))
+          .set(auth(owner))
+          .send({ status });
+      const fulfillmentEvents = () =>
+        (emitSpy.mock.calls as unknown[][]).filter(
+          ([, type]) => type === 'order.fulfillment_changed',
+        );
+
+      await move('ready').expect(409);
+      await move('pending').expect(400);
+
+      emitSpy.mockClear();
+      const preparing = await move('preparing').expect(200);
+      expect(preparing.body.order.fulfillmentStatus).toBe('preparing');
+      expect(fulfillmentEvents()).toEqual([
+        [
+          seed.branchA.id,
+          'order.fulfillment_changed',
+          expect.objectContaining({
+            orderCode: 'PED-0001',
+            orderType: 'delivery',
+            fulfillmentStatus: 'preparing',
+            phone: `+${PHONE}`,
+          }),
+        ],
+      ]);
+
+      emitSpy.mockClear();
+      for (let i = 0; i < 2; i++) {
+        const res = await http()
+          .patch(`${ORDERS_URL}/PED-0001`)
+          .set(bot())
+          .send({ fulfillmentStatus: 'on_the_way' })
+          .expect(200);
+        expect(res.body.order.fulfillmentStatus).toBe('on_the_way');
+      }
+      expect(fulfillmentEvents()).toHaveLength(0);
+
+      await move('delivered').expect(200);
+      const toDeliver = await http()
+        .get(panelUrl(`to-deliver?branchId=${seed.branchA.id}`))
+        .set(auth(owner))
+        .expect(200);
+      expect(toDeliver.body.total).toBe(0);
+      expect((await orderOf('PED-0001')).fulfillmentUpdatedAt).not.toBeNull();
+    });
+
+    it('lets the bot cancel an unpaid pickup and returns the wallet', async () => {
+      await openOrder({
+        code: 'PED-0002',
+        type: 'pickup',
+        phone: PHONE,
+        items: items(),
+      }).expect(201);
+      await giveWallet(15);
+
+      await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({ fulfillmentStatus: 'ready' })
+        .expect(409);
+      await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({ status: 'payment_link', fulfillmentStatus: 'ready' })
+        .expect(400);
+      await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({})
+        .expect(400);
+
+      const link = await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({ status: 'payment_link', walletUse: 'all' })
+        .expect(200);
+      expect(link.body.order.walletDiscount).toBe(15);
+
+      const cancelled = await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({ status: 'cancelled' })
+        .expect(200);
+      expect(cancelled.body.order.status).toBe('cancelled');
+      expect(cancelled.body.walletBalance).toBe(15);
+      expect((await orderOf('PED-0002')).closedAt).not.toBeNull();
+    });
+
+    it('does not let the bot cancel a table account', async () => {
+      const { validTables } = await dataSource
+        .getRepository(Branch)
+        .findOneByOrFail({ id: seed.branchA.id });
+      await openOrder({
+        code: 'MESA-0001',
+        phone: PHONE,
+        table: validTables[0] ?? '1',
+        items: items(),
+      }).expect(201);
+      await http()
+        .patch(`${ORDERS_URL}/MESA-0001`)
+        .set(bot())
+        .send({ status: 'cancelled' })
+        .expect(409);
+      await http()
+        .patch(`${ORDERS_URL}/MESA-0001`)
+        .set(bot())
+        .send({ fulfillmentStatus: 'preparing' })
+        .expect(409);
+    });
+
+    it('leaves unpaid orders out of the daily close', async () => {
+      await openOrder({
+        code: 'PED-0003',
+        type: 'pickup',
+        phone: PHONE,
+        items: items(),
+      }).expect(201);
+
+      const res = await http()
+        .post('/v1/bot/daily-close')
+        .set(bot())
+        .expect(200);
+      expect(res.body.closed).toContain('MESA-0001');
+      expect(res.body.closed).not.toContain('PED-0003');
+      expect((await orderOf('PED-0003')).status).toBe(OrderStatus.OPEN);
+    });
+
+    it('erases delivery addresses 30 days after the last change', async () => {
+      await openOrder({
+        code: 'PED-0004',
+        type: 'delivery',
+        phone: PHONE,
+        delivery,
+        items: items(),
+      }).expect(201);
+
+      const old = new Date(Date.now() - 31 * 24 * 60 * 60_000);
+      await dataSource
+        .getRepository(Order)
+        .update(
+          { code: 'PED-0001' },
+          { openedAt: old, closedAt: old, fulfillmentUpdatedAt: old },
+        );
+
+      const purged = await app.get(OrderingPrivacyService).purgeDeliveryData();
+      expect(purged).toBe(1);
+
+      const erased = await orderOf('PED-0001');
+      expect(erased).toMatchObject({
+        deliveryAddress: null,
+        deliveryReferences: null,
+        deliveryLatitude: null,
+        deliveryLongitude: null,
+      });
+      expect(Number(erased.deliveryFee)).toBe(42);
+      expect((await orderOf('PED-0004')).deliveryAddress).toBe(
+        delivery.address,
+      );
     });
   });
 });

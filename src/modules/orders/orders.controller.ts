@@ -18,6 +18,7 @@ import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { AddRoundDto } from '@/modules/orders/dto/add-round.dto';
 import { FindBillingDto } from '@/modules/orders/dto/find-billing.dto';
 import { OpenTabDto } from '@/modules/orders/dto/open-tab.dto';
+import { UpdateFulfillmentDto } from '@/modules/orders/dto/update-fulfillment.dto';
 import { UpdateRoundStatusDto } from '@/modules/orders/dto/update-round-status.dto';
 import { OrdersService } from '@/modules/orders/orders.service';
 import { OrderAccountsService } from '@/modules/orders/services/order-accounts.service';
@@ -87,6 +88,25 @@ export class OrdersController {
     return this.ordersService.billing(branchId, date);
   }
 
+  /** Pedidos de recoger y domicilio pagados que faltan por entregar. */
+  @Get('to-deliver')
+  @Auth(ORDER_ROLES)
+  async findToDeliver(
+    @Query('branchId', ParseUUIDPipe) branchId: string,
+    @CurrentUser() user: User,
+  ) {
+    await this.accessControl.assertBranchAccess(user, branchId, 'branch');
+    const orders = await this.ordersService.findToDeliver(branchId);
+    return {
+      orders: orders.map((order) => ({
+        ...toOrderView(order),
+        // Quien entrega necesita poder llamar al cliente.
+        phone: order.customer?.phone ?? null,
+      })),
+      total: orders.length,
+    };
+  }
+
   @Post('tabs')
   @Auth(ORDER_ROLES)
   async openTab(@Body() dto: OpenTabDto, @CurrentUser() user: User) {
@@ -128,6 +148,23 @@ export class OrdersController {
     await this.accessControl.assertOrderAccess(user, id, 'branch');
     const { order, round } = await this.accounts.addStaffRound(id, dto.items);
     return { order: toOrderView(order), round: toRoundView(round) };
+  }
+
+  /** Botones de "Para entregar". Se le avisa al bot para que avise al cliente. */
+  @Patch(':id/fulfillment')
+  @Auth(ORDER_ROLES)
+  async updateFulfillment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateFulfillmentDto,
+    @CurrentUser() user: User,
+  ) {
+    await this.accessControl.assertOrderAccess(user, id, 'branch');
+    const order = await this.accounts.updateFulfillment(
+      { id },
+      dto.status,
+      'panel',
+    );
+    return { order: toOrderView(order) };
   }
 
   @Post(':id/settle')

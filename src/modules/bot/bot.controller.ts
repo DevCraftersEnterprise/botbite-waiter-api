@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -174,9 +175,9 @@ export class BotController {
 
   @Patch('orders/:code')
   @ApiOperation({
-    summary: 'Avanza el estado de la cuenta',
+    summary: 'Avanza el estado de la cuenta o de la entrega',
     description:
-      'Avisa a caja al pedir la cuenta y al elegir pagar con el mesero. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina: toma de la respuesta los importes del link. Un cambio de estado no permitido responde 409.',
+      'Con `status`: avisa a caja al pedir la cuenta y al elegir pagar con el mesero. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina: toma de la respuesta los importes del link. En recoger y domicilio, `open` → `payment_link` aplica el monedero, y `cancelled` cancela un pedido sin pagar y devuelve el saldo usado. Con `fulfillmentStatus`: avanza la entrega de un pedido pagado. Se manda uno de los dos. Un cambio no permitido responde 409.',
   })
   @ApiOkResponse({ type: BotOrderResponse })
   async updateOrder(
@@ -184,8 +185,33 @@ export class BotController {
     @Param('code') code: string,
     @Body() dto: UpdateBotOrderDto,
   ) {
+    const { status, fulfillmentStatus, ...wallet } = dto;
+
+    if (Boolean(status) === Boolean(fulfillmentStatus)) {
+      throw new BadRequestException('Send either status or fulfillmentStatus');
+    }
+
+    if (fulfillmentStatus) {
+      const order = await this.accounts.updateFulfillment(
+        { code, branchId },
+        fulfillmentStatus,
+        'bot',
+      );
+      return {
+        order: toOrderView(order),
+        walletBalance: await this.customers.balanceOf(
+          branchId,
+          order.customerId,
+        ),
+        walletCapped: false,
+      };
+    }
+
     const { order, walletBalance, walletCapped } =
-      await this.accounts.updateFromBot(branchId, code, dto);
+      await this.accounts.updateFromBot(branchId, code, {
+        ...wallet,
+        status: status!,
+      });
 
     return { order: toOrderView(order), walletBalance, walletCapped };
   }

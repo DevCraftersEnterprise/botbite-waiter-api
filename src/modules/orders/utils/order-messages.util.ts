@@ -2,6 +2,7 @@ import { Invoice } from '@/modules/orders/entities/invoice.entity';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { Payment } from '@/modules/orders/entities/payment.entity';
+import { OrderType } from '@/modules/orders/enums/order.enums';
 
 const money = (value: number | string): string =>
   `$${Number(value).toFixed(2)}`;
@@ -67,6 +68,53 @@ export const paymentMessage = (order: Order, payment: Payment): string => {
       : money(payment.paidAmount);
 
   return `💳 ${who(order)} pagó con Mercado Pago: ${breakdown}. Operación ${payment.providerPaymentId}. Ya no hay que cobrarle.`;
+};
+
+const ORDER_LABEL: Record<string, string> = {
+  delivery: '🛵 Pedido a domicilio',
+  pickup: '🛍️ Pedido para recoger',
+};
+
+/** Fecha y hora en la zona de la sucursal: "lun 10 nov, 7:30 p.m.". */
+export const formatLocal = (date: Date, timeZone: string): string =>
+  new Intl.DateTimeFormat('es-MX', {
+    timeZone,
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+
+/**
+ * Aviso de un pedido de recoger o domicilio ya pagado: es cuando caja se
+ * entera. No lleva la dirección: esa solo vive en el pedido.
+ */
+export const orderingPaidMessage = (
+  order: Order,
+  items: OrderItem[],
+  payment: Payment,
+  timeZone: string,
+): string => {
+  const fee = Number(payment.deliveryFee);
+  const tip = Number(payment.tip);
+  const parts = [
+    `consumo ${money(payment.consumption)}`,
+    fee > 0 && `envío ${money(fee)}`,
+    tip > 0 && `propina ${money(tip)}`,
+  ].filter(Boolean);
+
+  return [
+    `${ORDER_LABEL[order.type] ?? '🛍️ Pedido'} pagado${order.customerName ? ` de ${order.customerName}` : ''}:`,
+    order.scheduledFor &&
+      `⏰ Programado para ${formatLocal(order.scheduledFor, timeZone)}`,
+    ...items.map(itemLine),
+    `${parts.join(' + ')} = ${money(payment.paidAmount)} con Mercado Pago (operación ${payment.providerPaymentId}).`,
+    order.type === OrderType.DELIVERY &&
+      'La dirección está en "Para entregar".',
+  ]
+    .filter(Boolean)
+    .join('\n');
 };
 
 export const incompletePaymentMessage = (

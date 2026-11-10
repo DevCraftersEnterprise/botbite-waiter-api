@@ -9,17 +9,22 @@ import { RestaurantCustomersService } from '@/modules/customers/services/restaur
 import { NotificationType } from '@/modules/notifications/enums/notification-type.enum';
 import { OrdersGateway } from '@/modules/notifications/gateways/orders.gateway';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
+import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { Payment } from '@/modules/orders/entities/payment.entity';
 import {
   ACTIVE_ORDER_STATUSES,
+  FulfillmentStatus,
   OrderStatus,
+  OrderType,
   PaymentMethod,
   PaymentStatus,
+  RoundStatus,
 } from '@/modules/orders/enums/order.enums';
 import {
   closedAccountPaymentMessage,
   incompletePaymentMessage,
+  orderingPaidMessage,
   paymentMessage,
   unmatchedPaymentMessage,
 } from '@/modules/orders/utils/order-messages.util';
@@ -99,7 +104,9 @@ export class OrderPaymentsService {
       return { payment: existing, order, created: false };
     }
 
-    const owedCents = order ? toCents(order.total) + toCents(order.tip) : 0;
+    const owedCents = order
+      ? toCents(order.total) + toCents(order.tip) + toCents(order.deliveryFee)
+      : 0;
     const status = this.resolveStatus(order, input.amount, owedCents);
 
     const cashbackCents =
@@ -115,6 +122,7 @@ export class OrderPaymentsService {
         status,
         consumption: order ? Number(order.total) : 0,
         tip: order ? Number(order.tip) : 0,
+        deliveryFee: order ? Number(order.deliveryFee) : 0,
         amount: fromCents(owedCents),
         paidAmount: input.amount,
         paymentType: input.paymentType ?? null,
@@ -146,12 +154,27 @@ export class OrderPaymentsService {
     order.status = OrderStatus.PAID;
     order.paymentMethod = PaymentMethod.MERCADO_PAGO;
     order.closedAt = new Date();
+
+    // Recoger y domicilio: el pago abre la entrega y cuenta la visita.
+    if (order.type !== OrderType.DINE_IN) {
+      order.fulfillmentStatus = FulfillmentStatus.PENDING;
+      order.fulfillmentUpdatedAt = order.closedAt;
+      if (order.customerId) {
+        await this.customers.registerVisit(
+          manager,
+          order.branchId,
+          order.customerId,
+          true,
+        );
+      }
+    }
+
     await manager.save(order);
 
     return this.earnCashback(manager, order);
   }
 
-  /** Sobre lo consumido, sin propina. Solo se gana pagando en línea. */
+  /** Sobre lo consumido, sin propina ni envío. Solo se gana pagando en línea. */
   private async earnCashback(
     manager: EntityManager,
     order: Order,
@@ -183,8 +206,15 @@ export class OrderPaymentsService {
   }
 
   private async announce({ payment, order }: PaymentResult): Promise<void> {
+    const notice =
+      order &&
+      order.type !== OrderType.DINE_IN &&
+      payment.status === PaymentStatus.APPROVED
+        ? await this.orderingNotice(order, payment)
+        : this.noticeFor(payment, order);
+
     await this.notificationsService.create({
-      ...this.noticeFor(payment, order),
+      ...notice,
       branchId: payment.branchId,
       orderId: order?.id ?? null,
       phoneNumber:
@@ -192,6 +222,34 @@ export class OrderPaymentsService {
     });
 
     this.ordersGateway.emitOrderUpdate(payment.branchId);
+  }
+
+  /** Un pedido pagado es para caja una comanda nueva, con su pago. */
+  private async orderingNotice(
+    order: Order,
+    payment: Payment,
+  ): Promise<{ type: NotificationType; message: string }> {
+    const [items, branch] = await Promise.all([
+      this.dataSource.getRepository(OrderItem).find({
+        where: { orderId: order.id },
+        relations: { round: true },
+        order: { createdAt: 'ASC' },
+      }),
+      this.dataSource.getRepository(Branch).findOneOrFail({
+        where: { id: order.branchId },
+        select: { id: true, timezone: true },
+      }),
+    ]);
+
+    return {
+      type: NotificationType.ORDER,
+      message: orderingPaidMessage(
+        order,
+        items.filter((item) => item.round?.status !== RoundStatus.CANCELLED),
+        payment,
+        branch.timezone,
+      ),
+    };
   }
 
   private noticeFor(
