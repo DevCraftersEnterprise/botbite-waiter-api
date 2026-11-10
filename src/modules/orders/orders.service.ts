@@ -135,8 +135,14 @@ export class OrdersService {
     >(
       `
       SELECT
-        count(*) FILTER (WHERE o."status" <> 'cancelled')::int AS "accounts",
-        count(*) FILTER (WHERE o."status" IN (${this.statusList()}))::int AS "openAccounts",
+        -- Un pedido de recoger o domicilio cuenta hasta que se paga; las mesas, desde que se abren.
+        count(*) FILTER (
+          WHERE o."status" <> 'cancelled'
+            AND (o."type" = 'dine_in' OR o."status" IN ('paid', 'settled'))
+        )::int AS "accounts",
+        count(*) FILTER (
+          WHERE o."type" = 'dine_in' AND o."status" IN (${this.statusList()})
+        )::int AS "openAccounts",
         count(*) FILTER (WHERE o."status" IN ('paid', 'settled'))::int AS "closedAccounts",
         COALESCE(sum(o."total") FILTER (WHERE o."status" IN ('paid', 'settled')), 0) AS "sales",
         COALESCE(sum(o."tip") FILTER (WHERE o."status" IN ('paid', 'settled')), 0) AS "tips",
