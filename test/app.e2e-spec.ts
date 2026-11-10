@@ -3590,6 +3590,307 @@ describe('BotBite API (e2e)', () => {
       }
     });
   });
+  describe('ordering (pickup and delivery)', () => {
+    const WAITER_NUMBER = '555000111222';
+    const ORDERING_NUMBER = '777000111222';
+    const orderingUrl = (restaurantId: string, branchId: string) =>
+      `/v1/branches/${restaurantId}/${branchId}/ordering`;
+    const urlA = () => orderingUrl(seed.restaurantA.id, seed.branchA.id);
+    const urlB = () => orderingUrl(seed.restaurantB.id, seed.branchB.id);
+    let botKeyA: string;
+    let botKeyB: string;
+
+    const createKey = async (restaurantId: string, branchId: string) => {
+      const admin = await tokenFor(seed.superUser.email);
+      const created = await http()
+        .post(`/v1/branches/${restaurantId}/${branchId}/bot-keys`)
+        .set(auth(admin))
+        .send({ name: 'pedidos' })
+        .expect(201);
+      return created.body.secret as string;
+    };
+
+    const fullConfig = {
+      enabled: true,
+      phoneNumberId: ORDERING_NUMBER,
+      phoneNumber: '+5216441110000',
+      types: ['pickup', 'delivery'],
+      delivery: { baseFee: 30, includedKm: 4, extraPer100m: 1, maxKm: 8.5 },
+      noDeliveryZones: [
+        {
+          name: 'Colonia X (de noche)',
+          latitude: '27.5200123',
+          longitude: -109.94,
+          radiusMeters: 500,
+          days: [6, 5],
+          from: '21:00',
+          to: '06:00',
+        },
+        {
+          name: 'Zona cerrada siempre',
+          latitude: 27.45,
+          longitude: -109.94,
+          radiusMeters: 300,
+        },
+      ],
+      hours: [{ days: [0, 1, 2, 3, 4, 5, 6], opens: '18:00', closes: '23:00' }],
+      scheduling: { enabled: true },
+      commissionPct: 0.5,
+    };
+
+    beforeAll(async () => {
+      // Pruebas anteriores apagan la sucursal B; su llave necesita que esté activa.
+      await dataSource
+        .getRepository(Restaurant)
+        .update({ id: seed.restaurantB.id }, { isActive: true });
+      await dataSource
+        .getRepository(Branch)
+        .update({ id: seed.branchB.id }, { isActive: true });
+      // Sin avisos al mesero y con un número de mesero conocido.
+      await dataSource.getRepository(Branch).update(
+        { id: seed.branchA.id },
+        {
+          botBaseUrl: null,
+          whatsappPhoneNumberId: WAITER_NUMBER,
+          verifyLocation: false,
+          latitude: null,
+          longitude: null,
+        },
+      );
+      botKeyA = await createKey(seed.restaurantA.id, seed.branchA.id);
+      botKeyB = await createKey(seed.restaurantB.id, seed.branchB.id);
+    });
+
+    it('starts without ordering, for the panel and for the bot', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const panel = await http().get(urlA()).set(auth(owner)).expect(200);
+      expect(panel.body).toEqual({ ordering: null });
+
+      const bot = await http()
+        .get('/v1/bot/branch')
+        .set('X-BotBite-Key', botKeyA)
+        .expect(200);
+      expect(bot.body.branch.ordering).toBeNull();
+    });
+
+    it('keeps other restaurants out', async () => {
+      const otherOwner = await tokenFor(seed.clientB.email);
+      await http().get(urlA()).set(auth(otherOwner)).expect(403);
+      await http()
+        .patch(urlA())
+        .set(auth(otherOwner))
+        .send({ prepMinutes: 30 })
+        .expect(403);
+    });
+
+    it('lets only BotBite enable it, set its number and the commission', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      for (const body of [
+        { enabled: true },
+        { phoneNumberId: ORDERING_NUMBER },
+        { phoneNumber: '5216441110000' },
+        { commissionPct: 1 },
+      ]) {
+        await http().patch(urlA()).set(auth(owner)).send(body).expect(403);
+      }
+    });
+
+    it('needs the number to enable it and coordinates to deliver', async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      const noNumber = await http()
+        .patch(urlA())
+        .set(auth(admin))
+        .send({ enabled: true })
+        .expect(400);
+      expect(noNumber.body.message).toContain('phoneNumberId and phoneNumber');
+
+      const noCoordinates = await http()
+        .patch(urlA())
+        .set(auth(admin))
+        .send(fullConfig)
+        .expect(400);
+      expect(noCoordinates.body.message).toContain('latitude and longitude');
+      expect(
+        (await http().get(urlA()).set(auth(admin)).expect(200)).body.ordering,
+      ).toBeNull();
+    });
+
+    it('saves the settings and the bot reads them in branch.ordering', async () => {
+      await dataSource
+        .getRepository(Branch)
+        .update(
+          { id: seed.branchA.id },
+          { latitude: 27.535038, longitude: -109.954031 },
+        );
+      const admin = await tokenFor(seed.superUser.email);
+      const saved = await http()
+        .patch(urlA())
+        .set(auth(admin))
+        .send(fullConfig)
+        .expect(200);
+
+      const expected = {
+        enabled: true,
+        accepting: true,
+        phoneNumberId: ORDERING_NUMBER,
+        // WhatsApp lo muestra sin "+"; el 1 se respeta.
+        phoneNumber: '5216441110000',
+        types: ['pickup', 'delivery'],
+        delivery: { baseFee: 30, includedKm: 4, extraPer100m: 1, maxKm: 8.5 },
+        noDeliveryZones: [
+          {
+            name: 'Colonia X (de noche)',
+            latitude: 27.520012,
+            longitude: -109.94,
+            radiusMeters: 500,
+            days: [5, 6],
+            from: '21:00',
+            to: '06:00',
+          },
+          {
+            name: 'Zona cerrada siempre',
+            latitude: 27.45,
+            longitude: -109.94,
+            radiusMeters: 300,
+            days: [],
+            from: null,
+            to: null,
+          },
+        ],
+        hours: [
+          { days: [0, 1, 2, 3, 4, 5, 6], opens: '18:00', closes: '23:00' },
+        ],
+        scheduling: {
+          enabled: true,
+          maxDays: 1,
+          minLeadMinutes: 45,
+          stepMinutes: 30,
+          reminderMinutes: 30,
+          cancelUntilMinutes: 60,
+        },
+        commissionPct: 0.5,
+        paymentLinkMinutes: 60,
+        prepMinutes: 20,
+      };
+      expect(saved.body.ordering).toEqual(expected);
+
+      const bot = await http()
+        .get('/v1/bot/branch')
+        .set('X-BotBite-Key', botKeyA)
+        .expect(200);
+      expect(bot.body.branch.ordering).toEqual(expected);
+    });
+
+    it('lets the owner adjust fees and hours, replacing whole lists', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .patch(urlA())
+        .set(auth(owner))
+        .send({
+          delivery: { baseFee: 35, maxKm: null },
+          hours: [
+            { days: [1, 2, 3, 4, 5], opens: '13:00', closes: '16:00' },
+            { days: [5, 6], opens: '19:00', closes: '01:00' },
+          ],
+          scheduling: { maxDays: 2 },
+          prepMinutes: 25,
+        })
+        .expect(200);
+
+      expect(res.body.ordering).toMatchObject({
+        delivery: { baseFee: 35, includedKm: 4, extraPer100m: 1, maxKm: null },
+        hours: [
+          { days: [1, 2, 3, 4, 5], opens: '13:00', closes: '16:00' },
+          { days: [5, 6], opens: '19:00', closes: '01:00' },
+        ],
+        scheduling: { enabled: true, maxDays: 2 },
+        prepMinutes: 25,
+        commissionPct: 0.5,
+      });
+      expect(res.body.ordering.noDeliveryZones).toHaveLength(2);
+    });
+
+    it('rejects zones, hours and types that the bot could not use', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const zone = { name: 'Z', latitude: 27.5, longitude: -109.9 };
+      for (const body of [
+        { noDeliveryZones: [{ ...zone, radiusMeters: 300, from: '21:00' }] },
+        { noDeliveryZones: [{ ...zone, radiusMeters: 5 }] },
+        { hours: [{ days: [1], opens: '18:00', closes: '18:00' }] },
+        { hours: [{ days: [], opens: '18:00', closes: '23:00' }] },
+        { hours: [{ days: [7], opens: '18:00', closes: '23:00' }] },
+        { types: ['dine_in'] },
+        { types: [] },
+        { scheduling: { stepMinutes: 1 } },
+      ]) {
+        await http().patch(urlA()).set(auth(owner)).send(body).expect(400);
+      }
+    });
+
+    it('keeps one WhatsApp number per branch and per mode', async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      // El del mesero de la misma sucursal.
+      await http()
+        .patch(urlA())
+        .set(auth(admin))
+        .send({ phoneNumberId: WAITER_NUMBER })
+        .expect(409);
+      // El de pedidos de otra sucursal.
+      await http()
+        .patch(urlB())
+        .set(auth(admin))
+        .send({ phoneNumberId: ORDERING_NUMBER })
+        .expect(409);
+      // Como número del mesero de otra sucursal.
+      await http()
+        .patch(
+          `/v1/branches/${seed.restaurantB.id}/${seed.branchB.id}/bot-config`,
+        )
+        .set(auth(admin))
+        .send({ whatsappPhoneNumberId: ORDERING_NUMBER })
+        .expect(409);
+    });
+
+    it('pauses and resumes from WhatsApp and from the panel', async () => {
+      const paused = await http()
+        .patch('/v1/bot/ordering')
+        .set('X-BotBite-Key', botKeyA)
+        .send({ accepting: false })
+        .expect(200);
+      expect(paused.body).toEqual({ accepting: false });
+
+      const owner = await tokenFor(seed.clientA.email);
+      expect(
+        (await http().get(urlA()).set(auth(owner)).expect(200)).body.ordering
+          .accepting,
+      ).toBe(false);
+
+      await http()
+        .patch(`${urlA()}/accepting`)
+        .set(auth(owner))
+        .send({ accepting: true })
+        .expect(200, { accepting: true });
+
+      const bot = await http()
+        .get('/v1/bot/branch')
+        .set('X-BotBite-Key', botKeyA)
+        .expect(200);
+      expect(bot.body.branch.ordering.accepting).toBe(true);
+    });
+
+    it('answers 404 to a branch without ordering', async () => {
+      await http()
+        .patch('/v1/bot/ordering')
+        .set('X-BotBite-Key', botKeyB)
+        .send({ accepting: false })
+        .expect(404);
+      await http()
+        .patch('/v1/bot/ordering')
+        .set('X-BotBite-Key', botKeyA)
+        .send({ accepting: 'no' })
+        .expect(400);
+    });
+  });
 });
 
 async function seedData(dataSource: DataSource): Promise<Seed> {

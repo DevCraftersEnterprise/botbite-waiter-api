@@ -22,6 +22,7 @@ import { MenusModule } from '@/modules/menus/menus.module';
 import { BotEventsModule } from '@/modules/bot-events/bot-events.module';
 import { BotModule } from '@/modules/bot/bot.module';
 import { NotificationsModule } from '@/modules/notifications/notifications.module';
+import { OrderingModule } from '@/modules/ordering/ordering.module';
 import { OrdersModule } from '@/modules/orders/orders.module';
 import { ProductsModule } from '@/modules/products/products.module';
 import { RestaurantsModule } from '@/modules/restaurants/restaurants.module';
@@ -81,6 +82,7 @@ import { UsersModule } from '@/modules/users/users.module';
     BranchesModule,
     MenusModule,
     OrdersModule,
+    OrderingModule,
     CustomersModule,
     AuditModule,
     NotificationsModule,

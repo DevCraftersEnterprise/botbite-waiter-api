@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiSecurity,
@@ -48,6 +49,11 @@ import { BotConfigService } from '@/modules/bot/services/bot-config.service';
 import { BOT_IP_LIMIT } from '@/modules/bot/utils/bot-throttle.util';
 import { RestaurantCustomersService } from '@/modules/customers/services/restaurant-customers.service';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
+import {
+  AcceptingResponse,
+  UpdateAcceptingDto,
+} from '@/modules/ordering/dto/update-accepting.dto';
+import { OrderingConfigService } from '@/modules/ordering/services/ordering-config.service';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { OrderSource } from '@/modules/orders/enums/order.enums';
 import {
@@ -85,6 +91,7 @@ export class BotController {
     private readonly invoices: OrderInvoicesService,
     private readonly customers: RestaurantCustomersService,
     private readonly notificationsService: NotificationsService,
+    private readonly orderingConfigService: OrderingConfigService,
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
   ) {}
@@ -98,6 +105,21 @@ export class BotController {
   @ApiOkResponse({ type: BotBranchResponse })
   findBranch(@BotBranchId() branchId: string): Promise<BotBranchResponse> {
     return this.botConfigService.findBotBranch(branchId);
+  }
+
+  @Patch('ordering')
+  @ApiOperation({
+    summary: 'Pausa o reanuda los pedidos (recoger y domicilio)',
+    description:
+      'Lo que caja escribe en WhatsApp (*pausar* / *activar*) para que el panel lo muestre. Repetir el mismo valor no hace nada. 404 si la sucursal no tiene el modo pedidos activo.',
+  })
+  @ApiOkResponse({ type: AcceptingResponse })
+  @ApiNotFoundResponse({ description: 'La sucursal no tiene pedidos activos' })
+  updateOrdering(
+    @BotBranchId() branchId: string,
+    @Body() dto: UpdateAcceptingDto,
+  ): Promise<AcceptingResponse> {
+    return this.orderingConfigService.setAccepting(branchId, dto.accepting);
   }
 
   @Post('orders')

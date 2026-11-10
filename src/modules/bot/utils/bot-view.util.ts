@@ -7,11 +7,15 @@ import {
   DEFAULT_BRANCH_FEATURES,
 } from '@/modules/branches/entities/branch.entity';
 import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
+import { toOrderingView } from '@/modules/ordering/utils/ordering-view.util';
 
 const toNumberOrNull = (value: number | string | null): number | null =>
   value === null ? null : Number(value);
 
-/** Postgres entrega `numeric` como texto y `time` con segundos. */
+/**
+ * Postgres entrega `numeric` como texto y `time` con segundos. Quien llama
+ * carga la relación `ordering`; sin ella, sale como si no hubiera pedidos.
+ */
 export const toBotBranchConfig = (branch: Branch): BotBranchConfig => ({
   id: branch.id,
   slug: branch.slug,
@@ -34,6 +38,7 @@ export const toBotBranchConfig = (branch: Branch): BotBranchConfig => ({
   surveyUrl: branch.surveyUrl,
   // Una función nueva vale su valor por defecto hasta que se guarde.
   features: { ...DEFAULT_BRANCH_FEATURES, ...branch.features },
+  ordering: branch.ordering ? toOrderingView(branch.ordering) : null,
 });
 
 const byMenuPosition = (a: MenuItem, b: MenuItem): number =>

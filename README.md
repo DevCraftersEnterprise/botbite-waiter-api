@@ -134,6 +134,7 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 - `POST /v1/bot/daily-close` cierra las cuentas de WhatsApp que nadie pidió.
 - `POST /v1/bot/customers/lookup` y `PATCH /v1/bot/customers` leen y guardan al comensal. El teléfono va en el cuerpo para que no quede en los logs. Los datos fiscales solo vienen con `includeTaxProfile: true`.
 - `POST /v1/bot/notifications` manda avisos sueltos a caja. Con `eventId` (un UUID que el bot repite en cada reintento) no se duplican: el reintento responde 200 con `created: false`.
+- `PATCH /v1/bot/ordering` con `{ "accepting": false }` pausa los pedidos cuando caja escribe *pausar*, y con `true` los reanuda. Responde 404 si la sucursal no tiene el modo pedidos activo.
 - Las rutas están documentadas en Swagger, en `/docs`.
 
 **Cuentas y comandas:** `orders` es la cuenta de una mesa y `order_rounds` sus comandas. Estados de la cuenta: `open` → `bill_requested` → `payment_link` o `with_waiter` → `paid` o `settled`. También `auto_closed` y `cancelled`. Estados de la comanda: `new` → `preparing` → `delivered`, o `cancelled`. El personal mueve las comandas, cobra las cuentas y abre sus propias cuentas desde el panel; las rondas de una cuenta de WhatsApp solo las agrega el bot.
@@ -159,9 +160,14 @@ Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<c
 | `GET`, `PATCH` | `/v1/branches/:restaurantId/:branchId/bot-config` | Dueño o admin. Slug, `phone_number_id`, URL del mesero y funciones contratadas: solo admin |
 | `GET`, `POST` | `/v1/branches/:restaurantId/:branchId/bot-keys` | Solo admin |
 | `DELETE` | `/v1/branches/:restaurantId/:branchId/bot-keys/:keyId` | Solo admin |
+| `GET` | `/v1/branches/:restaurantId/:branchId/ordering` | Dueño, admin o personal de la sucursal. `{ ordering: null }` si nunca se configuró |
+| `PATCH` | `/v1/branches/:restaurantId/:branchId/ordering` | Dueño o admin. Activarlo, el número de pedidos y la comisión: solo admin |
+| `PATCH` | `/v1/branches/:restaurantId/:branchId/ordering/accepting` | Dueño, admin o personal de la sucursal: el interruptor "Recibiendo pedidos" |
 | `PATCH`, `DELETE` | `/v1/restaurants/:restaurantId/logo` | Dueño o admin. Sube (PNG, JPG o WebP; Cloudinary lo deja cuadrado) o quita el logo |
 
 El aviso de privacidad del restaurante es `privacyUrl` en `PATCH /v1/restaurants/:restaurantId` (https; `null` lo quita). El bot muestra siempre el de BotBite y agrega este si existe.
+
+**Modo pedidos:** `branch_ordering` guarda, por sucursal, lo que necesita el número de pedidos (recoger y domicilio con pago por adelantado): su número de WhatsApp, los tipos, la tarifa de envío, las zonas sin entrega, el horario, los pedidos programados, la comisión de BotBite y el interruptor "Recibiendo pedidos". El bot lo lee en `branch.ordering` de `GET /v1/bot/branch` (null si la sucursal no lo tiene) y comparte con el mesero la llave, la URL base y el catálogo. Para activarlo hacen falta el `phoneNumberId` y el teléfono, y para el envío a domicilio, las coordenadas de la sucursal. Un número de WhatsApp atiende una sola sucursal y un solo modo: no puede ser a la vez el del mesero y el de pedidos. Al guardar se manda `catalog.changed`.
 
 **Slugs:** el del restaurante es único en la plataforma y sale de su nombre (`punto-de-union`). El de la sucursal sigue el estándar `<restaurante>-<sucursal>` (`punto-de-union-cocorit`): se genera al crearla y, si un admin lo cambia, debe empezar con el del restaurante. Cambiar el slug de un restaurante no renombra sus sucursales, porque el QR impreso y el webhook dependen de ellos.
 
@@ -238,6 +244,7 @@ Las e2e levantan la app completa contra Postgres real. Cubren:
 - multi-tenant y personal;
 - categorías por restaurante y slugs;
 - configuración del mesero, llaves y `GET /v1/bot/branch`;
+- ajustes del modo pedidos, sus permisos y el interruptor "Recibiendo pedidos";
 - cuentas, rondas y sus estados, con carga simultánea y reintentos;
 - avisos firmados al mesero, contra un servidor local;
 - notificaciones;
