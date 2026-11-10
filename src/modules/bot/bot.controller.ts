@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -13,6 +14,7 @@ import {
 } from '@nestjs/common';
 import {
   ApiCreatedResponse,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiSecurity,
@@ -48,6 +50,11 @@ import { BotConfigService } from '@/modules/bot/services/bot-config.service';
 import { BOT_IP_LIMIT } from '@/modules/bot/utils/bot-throttle.util';
 import { RestaurantCustomersService } from '@/modules/customers/services/restaurant-customers.service';
 import { NotificationsService } from '@/modules/notifications/notifications.service';
+import {
+  AcceptingResponse,
+  UpdateAcceptingDto,
+} from '@/modules/ordering/dto/update-accepting.dto';
+import { OrderingConfigService } from '@/modules/ordering/services/ordering-config.service';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { OrderSource } from '@/modules/orders/enums/order.enums';
 import {
@@ -85,6 +92,7 @@ export class BotController {
     private readonly invoices: OrderInvoicesService,
     private readonly customers: RestaurantCustomersService,
     private readonly notificationsService: NotificationsService,
+    private readonly orderingConfigService: OrderingConfigService,
     @InjectRepository(Order)
     private readonly orderRepository: Repository<Order>,
   ) {}
@@ -98,6 +106,21 @@ export class BotController {
   @ApiOkResponse({ type: BotBranchResponse })
   findBranch(@BotBranchId() branchId: string): Promise<BotBranchResponse> {
     return this.botConfigService.findBotBranch(branchId);
+  }
+
+  @Patch('ordering')
+  @ApiOperation({
+    summary: 'Pausa o reanuda los pedidos (recoger y domicilio)',
+    description:
+      'Lo que caja escribe en WhatsApp (*pausar* / *activar*) para que el panel lo muestre. Repetir el mismo valor no hace nada. 404 si la sucursal no tiene el modo pedidos activo.',
+  })
+  @ApiOkResponse({ type: AcceptingResponse })
+  @ApiNotFoundResponse({ description: 'La sucursal no tiene pedidos activos' })
+  updateOrdering(
+    @BotBranchId() branchId: string,
+    @Body() dto: UpdateAcceptingDto,
+  ): Promise<AcceptingResponse> {
+    return this.orderingConfigService.setAccepting(branchId, dto.accepting);
   }
 
   @Post('orders')
@@ -152,9 +175,9 @@ export class BotController {
 
   @Patch('orders/:code')
   @ApiOperation({
-    summary: 'Avanza el estado de la cuenta',
+    summary: 'Avanza el estado de la cuenta o de la entrega',
     description:
-      'Avisa a caja al pedir la cuenta y al elegir pagar con el mesero. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina: toma de la respuesta los importes del link. Un cambio de estado no permitido responde 409.',
+      'Con `status`: avisa a caja al pedir la cuenta y al elegir pagar con el mesero. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina: toma de la respuesta los importes del link. En recoger y domicilio, `open` → `payment_link` aplica el monedero, y `cancelled` cancela un pedido sin pagar y devuelve el saldo usado. Con `fulfillmentStatus`: avanza la entrega de un pedido pagado. Se manda uno de los dos. Un cambio no permitido responde 409.',
   })
   @ApiOkResponse({ type: BotOrderResponse })
   async updateOrder(
@@ -162,8 +185,33 @@ export class BotController {
     @Param('code') code: string,
     @Body() dto: UpdateBotOrderDto,
   ) {
+    const { status, fulfillmentStatus, ...wallet } = dto;
+
+    if (Boolean(status) === Boolean(fulfillmentStatus)) {
+      throw new BadRequestException('Send either status or fulfillmentStatus');
+    }
+
+    if (fulfillmentStatus) {
+      const order = await this.accounts.updateFulfillment(
+        { code, branchId },
+        fulfillmentStatus,
+        'bot',
+      );
+      return {
+        order: toOrderView(order),
+        walletBalance: await this.customers.balanceOf(
+          branchId,
+          order.customerId,
+        ),
+        walletCapped: false,
+      };
+    }
+
     const { order, walletBalance, walletCapped } =
-      await this.accounts.updateFromBot(branchId, code, dto);
+      await this.accounts.updateFromBot(branchId, code, {
+        ...wallet,
+        status: status!,
+      });
 
     return { order: toOrderView(order), walletBalance, walletCapped };
   }

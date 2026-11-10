@@ -36,7 +36,14 @@ import { Invoice } from '@/modules/orders/entities/invoice.entity';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
-import { OrderStatus, RoundStatus } from '@/modules/orders/enums/order.enums';
+import {
+  FulfillmentStatus,
+  OrderStatus,
+  OrderType,
+  RoundStatus,
+} from '@/modules/orders/enums/order.enums';
+import { OrderingPrivacyService } from '@/modules/orders/services/ordering-privacy.service';
+import { BranchOrdering } from '@/modules/ordering/entities/branch-ordering.entity';
 import { Payment } from '@/modules/orders/entities/payment.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
@@ -1378,9 +1385,11 @@ describe('BotBite API (e2e)', () => {
       const code = nextCode();
       await openAccount(code).expect(201);
 
-      for (const status of ['paid', 'settled', 'cancelled', 'open']) {
+      for (const status of ['paid', 'settled', 'open']) {
         await setStatus(code, status).expect(400);
       }
+      // `cancelled` es solo para pedidos sin pagar; una cuenta de mesa la cancela caja.
+      await setStatus(code, 'cancelled').expect(409);
     });
 
     it('the panel sees active accounts and moves the rounds', async () => {
@@ -3588,6 +3597,901 @@ describe('BotBite API (e2e)', () => {
       } finally {
         switchOff.mockRestore();
       }
+    });
+  });
+  describe('ordering (pickup and delivery)', () => {
+    const WAITER_NUMBER = '555000111222';
+    const ORDERING_NUMBER = '777000111222';
+    const orderingUrl = (restaurantId: string, branchId: string) =>
+      `/v1/branches/${restaurantId}/${branchId}/ordering`;
+    const urlA = () => orderingUrl(seed.restaurantA.id, seed.branchA.id);
+    const urlB = () => orderingUrl(seed.restaurantB.id, seed.branchB.id);
+    let botKeyA: string;
+    let botKeyB: string;
+
+    const createKey = async (restaurantId: string, branchId: string) => {
+      const admin = await tokenFor(seed.superUser.email);
+      const created = await http()
+        .post(`/v1/branches/${restaurantId}/${branchId}/bot-keys`)
+        .set(auth(admin))
+        .send({ name: 'pedidos' })
+        .expect(201);
+      return created.body.secret as string;
+    };
+
+    const fullConfig = {
+      enabled: true,
+      phoneNumberId: ORDERING_NUMBER,
+      phoneNumber: '+5216441110000',
+      types: ['pickup', 'delivery'],
+      delivery: { baseFee: 30, includedKm: 4, extraPer100m: 1, maxKm: 8.5 },
+      noDeliveryZones: [
+        {
+          name: 'Colonia X (de noche)',
+          latitude: '27.5200123',
+          longitude: -109.94,
+          radiusMeters: 500,
+          days: [6, 5],
+          from: '21:00',
+          to: '06:00',
+        },
+        {
+          name: 'Zona cerrada siempre',
+          latitude: 27.45,
+          longitude: -109.94,
+          radiusMeters: 300,
+        },
+      ],
+      hours: [{ days: [0, 1, 2, 3, 4, 5, 6], opens: '18:00', closes: '23:00' }],
+      scheduling: { enabled: true },
+      commissionPct: 0.5,
+    };
+
+    beforeAll(async () => {
+      // Pruebas anteriores apagan la sucursal B; su llave necesita que esté activa.
+      await dataSource
+        .getRepository(Restaurant)
+        .update({ id: seed.restaurantB.id }, { isActive: true });
+      await dataSource
+        .getRepository(Branch)
+        .update({ id: seed.branchB.id }, { isActive: true });
+      // Sin avisos al mesero y con un número de mesero conocido.
+      await dataSource.getRepository(Branch).update(
+        { id: seed.branchA.id },
+        {
+          botBaseUrl: null,
+          whatsappPhoneNumberId: WAITER_NUMBER,
+          verifyLocation: false,
+          latitude: null,
+          longitude: null,
+        },
+      );
+      botKeyA = await createKey(seed.restaurantA.id, seed.branchA.id);
+      botKeyB = await createKey(seed.restaurantB.id, seed.branchB.id);
+    });
+
+    it('starts without ordering, for the panel and for the bot', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const panel = await http().get(urlA()).set(auth(owner)).expect(200);
+      expect(panel.body).toEqual({ ordering: null });
+
+      const bot = await http()
+        .get('/v1/bot/branch')
+        .set('X-BotBite-Key', botKeyA)
+        .expect(200);
+      expect(bot.body.branch.ordering).toBeNull();
+    });
+
+    it('keeps other restaurants out', async () => {
+      const otherOwner = await tokenFor(seed.clientB.email);
+      await http().get(urlA()).set(auth(otherOwner)).expect(403);
+      await http()
+        .patch(urlA())
+        .set(auth(otherOwner))
+        .send({ prepMinutes: 30 })
+        .expect(403);
+    });
+
+    it('lets only BotBite enable it, set its number and the commission', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      for (const body of [
+        { enabled: true },
+        { phoneNumberId: ORDERING_NUMBER },
+        { phoneNumber: '5216441110000' },
+        { commissionPct: 1 },
+      ]) {
+        await http().patch(urlA()).set(auth(owner)).send(body).expect(403);
+      }
+    });
+
+    it('needs the number to enable it and coordinates to deliver', async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      const noNumber = await http()
+        .patch(urlA())
+        .set(auth(admin))
+        .send({ enabled: true })
+        .expect(400);
+      expect(noNumber.body.message).toContain('phoneNumberId and phoneNumber');
+
+      const noCoordinates = await http()
+        .patch(urlA())
+        .set(auth(admin))
+        .send(fullConfig)
+        .expect(400);
+      expect(noCoordinates.body.message).toContain('latitude and longitude');
+      expect(
+        (await http().get(urlA()).set(auth(admin)).expect(200)).body.ordering,
+      ).toBeNull();
+    });
+
+    it('saves the settings and the bot reads them in branch.ordering', async () => {
+      await dataSource
+        .getRepository(Branch)
+        .update(
+          { id: seed.branchA.id },
+          { latitude: 27.535038, longitude: -109.954031 },
+        );
+      const admin = await tokenFor(seed.superUser.email);
+      const saved = await http()
+        .patch(urlA())
+        .set(auth(admin))
+        .send(fullConfig)
+        .expect(200);
+
+      const expected = {
+        enabled: true,
+        accepting: true,
+        phoneNumberId: ORDERING_NUMBER,
+        // WhatsApp lo muestra sin "+"; el 1 se respeta.
+        phoneNumber: '5216441110000',
+        types: ['pickup', 'delivery'],
+        delivery: { baseFee: 30, includedKm: 4, extraPer100m: 1, maxKm: 8.5 },
+        noDeliveryZones: [
+          {
+            name: 'Colonia X (de noche)',
+            latitude: 27.520012,
+            longitude: -109.94,
+            radiusMeters: 500,
+            days: [5, 6],
+            from: '21:00',
+            to: '06:00',
+          },
+          {
+            name: 'Zona cerrada siempre',
+            latitude: 27.45,
+            longitude: -109.94,
+            radiusMeters: 300,
+            days: [],
+            from: null,
+            to: null,
+          },
+        ],
+        hours: [
+          { days: [0, 1, 2, 3, 4, 5, 6], opens: '18:00', closes: '23:00' },
+        ],
+        scheduling: {
+          enabled: true,
+          maxDays: 1,
+          minLeadMinutes: 45,
+          stepMinutes: 30,
+          reminderMinutes: 30,
+          cancelUntilMinutes: 60,
+        },
+        commissionPct: 0.5,
+        paymentLinkMinutes: 60,
+        prepMinutes: 20,
+      };
+      expect(saved.body.ordering).toEqual(expected);
+
+      const bot = await http()
+        .get('/v1/bot/branch')
+        .set('X-BotBite-Key', botKeyA)
+        .expect(200);
+      expect(bot.body.branch.ordering).toEqual(expected);
+    });
+
+    it('lets the owner adjust fees and hours, replacing whole lists', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .patch(urlA())
+        .set(auth(owner))
+        .send({
+          delivery: { baseFee: 35, maxKm: null },
+          hours: [
+            { days: [1, 2, 3, 4, 5], opens: '13:00', closes: '16:00' },
+            { days: [5, 6], opens: '19:00', closes: '01:00' },
+          ],
+          scheduling: { maxDays: 2 },
+          prepMinutes: 25,
+        })
+        .expect(200);
+
+      expect(res.body.ordering).toMatchObject({
+        delivery: { baseFee: 35, includedKm: 4, extraPer100m: 1, maxKm: null },
+        hours: [
+          { days: [1, 2, 3, 4, 5], opens: '13:00', closes: '16:00' },
+          { days: [5, 6], opens: '19:00', closes: '01:00' },
+        ],
+        scheduling: { enabled: true, maxDays: 2 },
+        prepMinutes: 25,
+        commissionPct: 0.5,
+      });
+      expect(res.body.ordering.noDeliveryZones).toHaveLength(2);
+    });
+
+    it('rejects zones, hours and types that the bot could not use', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const zone = { name: 'Z', latitude: 27.5, longitude: -109.9 };
+      for (const body of [
+        { noDeliveryZones: [{ ...zone, radiusMeters: 300, from: '21:00' }] },
+        { noDeliveryZones: [{ ...zone, radiusMeters: 5 }] },
+        { hours: [{ days: [1], opens: '18:00', closes: '18:00' }] },
+        { hours: [{ days: [], opens: '18:00', closes: '23:00' }] },
+        { hours: [{ days: [7], opens: '18:00', closes: '23:00' }] },
+        { types: ['dine_in'] },
+        { types: [] },
+        { scheduling: { stepMinutes: 1 } },
+      ]) {
+        await http().patch(urlA()).set(auth(owner)).send(body).expect(400);
+      }
+    });
+
+    it('keeps one WhatsApp number per branch and per mode', async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      // El del mesero de la misma sucursal.
+      await http()
+        .patch(urlA())
+        .set(auth(admin))
+        .send({ phoneNumberId: WAITER_NUMBER })
+        .expect(409);
+      // El de pedidos de otra sucursal.
+      await http()
+        .patch(urlB())
+        .set(auth(admin))
+        .send({ phoneNumberId: ORDERING_NUMBER })
+        .expect(409);
+      // Como número del mesero de otra sucursal.
+      await http()
+        .patch(
+          `/v1/branches/${seed.restaurantB.id}/${seed.branchB.id}/bot-config`,
+        )
+        .set(auth(admin))
+        .send({ whatsappPhoneNumberId: ORDERING_NUMBER })
+        .expect(409);
+    });
+
+    it('pauses and resumes from WhatsApp and from the panel', async () => {
+      const paused = await http()
+        .patch('/v1/bot/ordering')
+        .set('X-BotBite-Key', botKeyA)
+        .send({ accepting: false })
+        .expect(200);
+      expect(paused.body).toEqual({ accepting: false });
+
+      const owner = await tokenFor(seed.clientA.email);
+      expect(
+        (await http().get(urlA()).set(auth(owner)).expect(200)).body.ordering
+          .accepting,
+      ).toBe(false);
+
+      await http()
+        .patch(`${urlA()}/accepting`)
+        .set(auth(owner))
+        .send({ accepting: true })
+        .expect(200, { accepting: true });
+
+      const bot = await http()
+        .get('/v1/bot/branch')
+        .set('X-BotBite-Key', botKeyA)
+        .expect(200);
+      expect(bot.body.branch.ordering.accepting).toBe(true);
+    });
+
+    it('answers 404 to a branch without ordering', async () => {
+      await http()
+        .patch('/v1/bot/ordering')
+        .set('X-BotBite-Key', botKeyB)
+        .send({ accepting: false })
+        .expect(404);
+      await http()
+        .patch('/v1/bot/ordering')
+        .set('X-BotBite-Key', botKeyA)
+        .send({ accepting: 'no' })
+        .expect(400);
+    });
+  });
+  describe('pickup and delivery orders', () => {
+    interface OrderBody {
+      id: string;
+      status: string;
+      subtotal: number;
+      total: number;
+      walletDiscount: number;
+      amountDue: number;
+    }
+    const ORDERS_URL = '/v1/bot/orders';
+    const PHONE = '5215533330001';
+    let botKey: string;
+    let emitSpy: jest.SpyInstance;
+
+    const bot = () => ({ 'X-BotBite-Key': botKey });
+    const inAnHour = () => new Date(Date.now() + 60 * 60_000).toISOString();
+    const delivery = {
+      address: 'Calle 5 de Febrero 123, Centro',
+      references: 'Portón negro',
+      latitude: '27.4912001',
+      longitude: -109.9381,
+      fee: 42,
+    };
+    const items = () => [
+      { menuItemId: seed.menuItem.id, quantity: 2, note: 'sin cebolla' },
+    ];
+    const openOrder = (body: object) =>
+      http().post(ORDERS_URL).set(bot()).send(body);
+    const orderOf = (code: string) =>
+      dataSource.getRepository(Order).findOneByOrFail({ code });
+    const membership = async () => {
+      const customer = await dataSource
+        .getRepository(Customer)
+        .findOneByOrFail({ phone: `+${PHONE}` });
+      return dataSource.getRepository(RestaurantCustomer).findOneByOrFail({
+        customerId: customer.id,
+        restaurantId: seed.restaurantA.id,
+      });
+    };
+    const giveWallet = async (walletBalance: number) => {
+      const { id } = await membership();
+      await dataSource
+        .getRepository(RestaurantCustomer)
+        .update({ id }, { walletBalance });
+    };
+    const notificationsOf = (orderId: string) =>
+      dataSource.getRepository(CashierNotification).find({
+        where: { orderId },
+        order: { createdAt: 'ASC' },
+      });
+    const panelUrl = (path: string) => `/v1/orders/${path}`;
+
+    beforeAll(async () => {
+      await dataSource
+        .getRepository(BranchOrdering)
+        .update(
+          { branchId: seed.branchA.id },
+          { enabled: true, types: [OrderType.PICKUP, OrderType.DELIVERY] },
+        );
+      await dataSource
+        .getRepository(Restaurant)
+        .update({ id: seed.restaurantA.id }, { walletPct: 10 });
+      const branch = await dataSource
+        .getRepository(Branch)
+        .findOneByOrFail({ id: seed.branchA.id });
+      await dataSource
+        .getRepository(Branch)
+        .update(
+          { id: seed.branchA.id },
+          { features: { ...branch.features, wallet: true } },
+        );
+
+      const admin = await tokenFor(seed.superUser.email);
+      const created = await http()
+        .post(`/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/bot-keys`)
+        .set(auth(admin))
+        .send({ name: 'pedidos' })
+        .expect(201);
+      botKey = created.body.secret as string;
+      emitSpy = jest.spyOn(app.get(BotEventsService), 'emit');
+    });
+
+    afterAll(() => emitSpy.mockRestore());
+
+    it('opens a delivery order without telling the cashier yet', async () => {
+      const scheduledFor = inAnHour();
+      const res = await openOrder({
+        code: 'PED-0001',
+        type: 'delivery',
+        phone: PHONE,
+        customerName: 'Ana',
+        scheduledFor,
+        delivery,
+        commissionPct: 0.5,
+        items: items(),
+      }).expect(201);
+
+      const order = res.body.order as OrderBody;
+      expect(order).toMatchObject({
+        type: 'delivery',
+        status: 'open',
+        table: null,
+        fulfillmentStatus: null,
+        scheduledFor,
+        deliveryFee: 42,
+        commissionPct: 0.5,
+        delivery: {
+          address: delivery.address,
+          references: 'Portón negro',
+          latitude: 27.4912,
+          longitude: -109.9381,
+        },
+      });
+      expect(order.amountDue).toBeCloseTo(order.subtotal + 42, 2);
+
+      // Reintento: no duplica nada.
+      await openOrder({
+        code: 'PED-0001',
+        type: 'delivery',
+        phone: PHONE,
+        delivery,
+        items: items(),
+      }).expect(200);
+
+      expect(await notificationsOf(order.id)).toHaveLength(0);
+      // Existe el cliente, pero la visita se cuenta al pagar.
+      expect((await membership()).visits).toBe(0);
+
+      const owner = await tokenFor(seed.clientA.email);
+      const active = await http()
+        .get(panelUrl(`active?branchId=${seed.branchA.id}`))
+        .set(auth(owner))
+        .expect(200);
+      expect(
+        active.body.orders.map((o: { code: string }) => o.code),
+      ).not.toContain('PED-0001');
+      const toDeliver = await http()
+        .get(panelUrl(`to-deliver?branchId=${seed.branchA.id}`))
+        .set(auth(owner))
+        .expect(200);
+      expect(toDeliver.body.total).toBe(0);
+    });
+
+    it('rejects orders that do not fit their type or the branch', async () => {
+      const base = { phone: PHONE, items: items() };
+      for (const body of [
+        { ...base, code: 'BAD-0001', type: 'pickup', delivery },
+        { ...base, code: 'BAD-0002', type: 'delivery' },
+        {
+          ...base,
+          code: 'BAD-0003',
+          type: 'dine_in',
+          table: '1',
+          scheduledFor: inAnHour(),
+        },
+        { ...base, code: 'BAD-0004', type: 'dine_in' },
+        { ...base, code: 'BAD-0005', type: 'takeout' },
+      ]) {
+        await openOrder(body).expect(400);
+      }
+
+      await dataSource
+        .getRepository(BranchOrdering)
+        .update({ branchId: seed.branchA.id }, { types: [OrderType.DELIVERY] });
+      await openOrder({ ...base, code: 'BAD-0006', type: 'pickup' }).expect(
+        400,
+      );
+      await dataSource
+        .getRepository(BranchOrdering)
+        .update({ branchId: seed.branchA.id }, { enabled: false });
+      await openOrder({
+        ...base,
+        code: 'BAD-0007',
+        type: 'delivery',
+        delivery,
+      }).expect(409);
+      await dataSource
+        .getRepository(BranchOrdering)
+        .update(
+          { branchId: seed.branchA.id },
+          { enabled: true, types: [OrderType.PICKUP, OrderType.DELIVERY] },
+        );
+    });
+
+    it('uses the wallet with the link and charges the delivery fee', async () => {
+      await giveWallet(20);
+      const link = await http()
+        .patch(`${ORDERS_URL}/PED-0001`)
+        .set(bot())
+        .send({ status: 'payment_link', walletUse: 'all' })
+        .expect(200);
+
+      const order = link.body.order as OrderBody;
+      expect(order.status).toBe('payment_link');
+      expect(order.walletDiscount).toBe(20);
+      expect(order.total).toBeCloseTo(order.subtotal - 20, 2);
+      expect(order.amountDue).toBeCloseTo(order.total + 42, 2);
+      expect(link.body.walletBalance).toBe(0);
+      expect(await notificationsOf(order.id)).toHaveLength(0);
+
+      const paid = await http()
+        .post('/v1/bot/payments')
+        .set(bot())
+        .send({
+          orderCode: 'PED-0001',
+          providerPaymentId: 'MP-PED-0001',
+          amount: order.amountDue,
+        })
+        .expect(201);
+
+      expect(paid.body.status).toBe('approved');
+      // 10 % del consumo, sin el envío.
+      expect(paid.body.cashback).toBeCloseTo(
+        Math.round(order.total * 10) / 100,
+        2,
+      );
+
+      const saved = await orderOf('PED-0001');
+      expect(saved.status).toBe(OrderStatus.PAID);
+      expect(saved.fulfillmentStatus).toBe(FulfillmentStatus.PENDING);
+      expect((await membership()).visits).toBe(1);
+
+      const [notice] = await notificationsOf(saved.id);
+      expect(notice.type).toBe(NotificationType.ORDER);
+      expect(notice.message).toContain('Pedido a domicilio pagado de Ana');
+      expect(notice.message).toContain('⏰ Programado para');
+      expect(notice.message).toContain('envío $42.00');
+      expect(notice.message).not.toContain('Calle 5');
+    });
+
+    it('lists paid orders to deliver, with the address, outside Orders', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await http()
+        .get(panelUrl(`to-deliver?branchId=${seed.branchA.id}`))
+        .set(auth(owner))
+        .expect(200);
+
+      expect(res.body.total).toBe(1);
+      expect(res.body.orders[0]).toMatchObject({
+        code: 'PED-0001',
+        type: 'delivery',
+        fulfillmentStatus: 'pending',
+        phone: `+${PHONE}`,
+        delivery: { address: delivery.address },
+      });
+      expect(res.body.orders[0].rounds[0].items).toHaveLength(1);
+
+      const otherOwner = await tokenFor(seed.clientB.email);
+      await http()
+        .get(panelUrl(`to-deliver?branchId=${seed.branchA.id}`))
+        .set(auth(otherOwner))
+        .expect(403);
+    });
+
+    it('moves the delivery from the panel and the bot, telling the bot only of panel changes', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const { id } = await orderOf('PED-0001');
+      const move = (status: string) =>
+        http()
+          .patch(panelUrl(`${id}/fulfillment`))
+          .set(auth(owner))
+          .send({ status });
+      const fulfillmentEvents = () =>
+        (emitSpy.mock.calls as unknown[][]).filter(
+          ([, type]) => type === 'order.fulfillment_changed',
+        );
+
+      await move('ready').expect(409);
+      await move('pending').expect(400);
+
+      emitSpy.mockClear();
+      const preparing = await move('preparing').expect(200);
+      expect(preparing.body.order.fulfillmentStatus).toBe('preparing');
+      expect(fulfillmentEvents()).toEqual([
+        [
+          seed.branchA.id,
+          'order.fulfillment_changed',
+          expect.objectContaining({
+            orderCode: 'PED-0001',
+            orderType: 'delivery',
+            fulfillmentStatus: 'preparing',
+            phone: `+${PHONE}`,
+          }),
+        ],
+      ]);
+
+      emitSpy.mockClear();
+      for (let i = 0; i < 2; i++) {
+        const res = await http()
+          .patch(`${ORDERS_URL}/PED-0001`)
+          .set(bot())
+          .send({ fulfillmentStatus: 'on_the_way' })
+          .expect(200);
+        expect(res.body.order.fulfillmentStatus).toBe('on_the_way');
+      }
+      expect(fulfillmentEvents()).toHaveLength(0);
+
+      await move('delivered').expect(200);
+      const toDeliver = await http()
+        .get(panelUrl(`to-deliver?branchId=${seed.branchA.id}`))
+        .set(auth(owner))
+        .expect(200);
+      expect(toDeliver.body.total).toBe(0);
+      expect((await orderOf('PED-0001')).fulfillmentUpdatedAt).not.toBeNull();
+    });
+
+    it('lets the bot cancel an unpaid pickup and returns the wallet', async () => {
+      await openOrder({
+        code: 'PED-0002',
+        type: 'pickup',
+        phone: PHONE,
+        items: items(),
+      }).expect(201);
+      await giveWallet(15);
+
+      await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({ fulfillmentStatus: 'ready' })
+        .expect(409);
+      await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({ status: 'payment_link', fulfillmentStatus: 'ready' })
+        .expect(400);
+      await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({})
+        .expect(400);
+
+      const link = await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({ status: 'payment_link', walletUse: 'all' })
+        .expect(200);
+      expect(link.body.order.walletDiscount).toBe(15);
+
+      const cancelled = await http()
+        .patch(`${ORDERS_URL}/PED-0002`)
+        .set(bot())
+        .send({ status: 'cancelled' })
+        .expect(200);
+      expect(cancelled.body.order.status).toBe('cancelled');
+      expect(cancelled.body.walletBalance).toBe(15);
+      expect((await orderOf('PED-0002')).closedAt).not.toBeNull();
+    });
+
+    it('does not let the bot cancel a table account', async () => {
+      const { validTables } = await dataSource
+        .getRepository(Branch)
+        .findOneByOrFail({ id: seed.branchA.id });
+      await openOrder({
+        code: 'MESA-0001',
+        phone: PHONE,
+        table: validTables[0] ?? '1',
+        items: items(),
+      }).expect(201);
+      await http()
+        .patch(`${ORDERS_URL}/MESA-0001`)
+        .set(bot())
+        .send({ status: 'cancelled' })
+        .expect(409);
+      await http()
+        .patch(`${ORDERS_URL}/MESA-0001`)
+        .set(bot())
+        .send({ fulfillmentStatus: 'preparing' })
+        .expect(409);
+    });
+
+    it('leaves unpaid orders out of the daily close', async () => {
+      await openOrder({
+        code: 'PED-0003',
+        type: 'pickup',
+        phone: PHONE,
+        items: items(),
+      }).expect(201);
+
+      const res = await http()
+        .post('/v1/bot/daily-close')
+        .set(bot())
+        .expect(200);
+      expect(res.body.closed).toContain('MESA-0001');
+      expect(res.body.closed).not.toContain('PED-0003');
+      expect((await orderOf('PED-0003')).status).toBe(OrderStatus.OPEN);
+    });
+
+    it('erases delivery addresses 30 days after the last change', async () => {
+      await openOrder({
+        code: 'PED-0004',
+        type: 'delivery',
+        phone: PHONE,
+        delivery,
+        items: items(),
+      }).expect(201);
+
+      const old = new Date(Date.now() - 31 * 24 * 60 * 60_000);
+      await dataSource
+        .getRepository(Order)
+        .update(
+          { code: 'PED-0001' },
+          { openedAt: old, closedAt: old, fulfillmentUpdatedAt: old },
+        );
+
+      const purged = await app.get(OrderingPrivacyService).purgeDeliveryData();
+      expect(purged).toBe(1);
+
+      const erased = await orderOf('PED-0001');
+      expect(erased).toMatchObject({
+        deliveryAddress: null,
+        deliveryReferences: null,
+        deliveryLatitude: null,
+        deliveryLongitude: null,
+      });
+      expect(Number(erased.deliveryFee)).toBe(42);
+      expect((await orderOf('PED-0004')).deliveryAddress).toBe(
+        delivery.address,
+      );
+    });
+  });
+  describe('cancelling paid orders', () => {
+    const PHONE = '5215533330002';
+    let botKey: string;
+    let emitSpy: jest.SpyInstance;
+
+    const bot = () => ({ 'X-BotBite-Key': botKey });
+    const orderOf = (code: string) =>
+      dataSource.getRepository(Order).findOneByOrFail({ code });
+    const membership = async () => {
+      const customer = await dataSource
+        .getRepository(Customer)
+        .findOneByOrFail({ phone: `+${PHONE}` });
+      return dataSource.getRepository(RestaurantCustomer).findOneByOrFail({
+        customerId: customer.id,
+        restaurantId: seed.restaurantA.id,
+      });
+    };
+    const balance = async () => Number((await membership()).walletBalance);
+    const setBalance = async (walletBalance: number) => {
+      const { id } = await membership();
+      await dataSource
+        .getRepository(RestaurantCustomer)
+        .update({ id }, { walletBalance });
+    };
+    const cancelPaid = (id: string, token: string) =>
+      http().post(`/v1/orders/${id}/cancel-paid`).set(auth(token)).send();
+
+    /** Pedido para recoger pagado, usando `wallet` de saldo. */
+    const paidPickup = async (code: string, wallet: number) => {
+      await http()
+        .post('/v1/bot/orders')
+        .set(bot())
+        .send({
+          code,
+          type: 'pickup',
+          phone: PHONE,
+          customerName: 'Luis',
+          items: [{ menuItemId: seed.menuItem.id, quantity: 3 }],
+        })
+        .expect(201);
+      await setBalance(wallet);
+      const link = await http()
+        .patch(`/v1/bot/orders/${code}`)
+        .set(bot())
+        .send({ status: 'payment_link', walletUse: 'all' })
+        .expect(200);
+      const amountDue = (link.body.order as { amountDue: number }).amountDue;
+      const paid = await http()
+        .post('/v1/bot/payments')
+        .set(bot())
+        .send({
+          orderCode: code,
+          providerPaymentId: `MP-${code}`,
+          amount: amountDue,
+        })
+        .expect(201);
+      return {
+        order: await orderOf(code),
+        amountDue,
+        cashback: paid.body.cashback as number,
+      };
+    };
+
+    beforeAll(async () => {
+      const admin = await tokenFor(seed.superUser.email);
+      const created = await http()
+        .post(`/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/bot-keys`)
+        .set(auth(admin))
+        .send({ name: 'cancelaciones' })
+        .expect(201);
+      botKey = created.body.secret as string;
+      emitSpy = jest.spyOn(app.get(BotEventsService), 'emit');
+    });
+
+    afterAll(() => emitSpy.mockRestore());
+
+    it('returns the wallet, takes back the cashback and tells the cashier and the bot', async () => {
+      const { order, amountDue, cashback } = await paidPickup('CAN-0001', 10);
+      expect(cashback).toBeGreaterThan(0);
+      // Le quedó el cashback; lo usado ya se descontó.
+      expect(await balance()).toBeCloseTo(cashback, 2);
+
+      emitSpy.mockClear();
+      const owner = await tokenFor(seed.clientA.email);
+      const res = await cancelPaid(order.id, owner).expect(200);
+
+      expect(res.body).toMatchObject({
+        order: {
+          status: 'cancelled',
+          fulfillmentStatus: 'cancelled',
+          walletDiscount: 10,
+        },
+        refundAmount: amountDue,
+        providerPaymentId: 'MP-CAN-0001',
+      });
+      // Vuelven los 10 usados y se va el cashback.
+      expect(await balance()).toBeCloseTo(10, 2);
+
+      const alert = await dataSource
+        .getRepository(CashierNotification)
+        .findOneByOrFail({ orderId: order.id, type: NotificationType.ALERT });
+      expect(alert.message).toContain(
+        'Se canceló el pedido para recoger de Luis',
+      );
+      expect(alert.message).toContain(`Reembolsa $${amountDue.toFixed(2)}`);
+
+      const cancelled = (emitSpy.mock.calls as unknown[][]).filter(
+        ([, type]) => type === 'order.cancelled',
+      );
+      expect(cancelled).toEqual([
+        [
+          seed.branchA.id,
+          'order.cancelled',
+          expect.objectContaining({
+            orderCode: 'CAN-0001',
+            orderType: 'pickup',
+            refundAmount: amountDue,
+            providerPaymentId: 'MP-CAN-0001',
+            phone: `+${PHONE}`,
+          }),
+        ],
+      ]);
+
+      await cancelPaid(order.id, owner).expect(409);
+      const toDeliver = await http()
+        .get(`/v1/orders/to-deliver?branchId=${seed.branchA.id}`)
+        .set(auth(owner))
+        .expect(200);
+      expect(
+        toDeliver.body.orders.map((o: { code: string }) => o.code),
+      ).not.toContain('CAN-0001');
+    });
+
+    it('never leaves the wallet below zero', async () => {
+      const { order, cashback } = await paidPickup('CAN-0002', 0);
+      // Ya se gastó el cashback.
+      await setBalance(cashback / 2);
+
+      const admin = await tokenFor(seed.superUser.email);
+      await cancelPaid(order.id, admin).expect(200);
+      expect(await balance()).toBe(0);
+    });
+
+    it('only cancels paid orders that were not delivered, for their owner', async () => {
+      const { order } = await paidPickup('CAN-0003', 0);
+      const otherOwner = await tokenFor(seed.clientB.email);
+      await cancelPaid(order.id, otherOwner).expect(403);
+
+      const owner = await tokenFor(seed.clientA.email);
+      await http()
+        .patch(`/v1/orders/${order.id}/fulfillment`)
+        .set(auth(owner))
+        .send({ status: 'ready' })
+        .expect(200);
+      await http()
+        .patch(`/v1/orders/${order.id}/fulfillment`)
+        .set(auth(owner))
+        .send({ status: 'delivered' })
+        .expect(200);
+      await cancelPaid(order.id, owner).expect(409);
+
+      const unpaid = await http()
+        .post('/v1/bot/orders')
+        .set(bot())
+        .send({
+          code: 'CAN-0004',
+          type: 'pickup',
+          phone: PHONE,
+          items: [{ menuItemId: seed.menuItem.id, quantity: 1 }],
+        })
+        .expect(201);
+      await cancelPaid(unpaid.body.order.id as string, owner).expect(409);
     });
   });
 });

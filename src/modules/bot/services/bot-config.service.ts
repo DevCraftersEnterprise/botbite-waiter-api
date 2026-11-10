@@ -22,6 +22,7 @@ import {
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { cleanTables } from '@/modules/branches/utils/table.util';
 import { Menu } from '@/modules/menus/entities/menu.entity';
+import { BranchOrdering } from '@/modules/ordering/entities/branch-ordering.entity';
 import { User } from '@/modules/users/entities/user.entity';
 
 /** Los DTO traen como undefined lo que no se envió: copiarlo borraría valores. */
@@ -39,6 +40,8 @@ export class BotConfigService {
     private readonly branchRepository: Repository<Branch>,
     @InjectRepository(Menu)
     private readonly menuRepository: Repository<Menu>,
+    @InjectRepository(BranchOrdering)
+    private readonly orderingRepository: Repository<BranchOrdering>,
   ) {}
 
   /** Configuración y catálogo que consume el bot. */
@@ -46,7 +49,7 @@ export class BotConfigService {
     const [branch, menus] = await Promise.all([
       this.branchRepository.findOne({
         where: { id: branchId },
-        relations: { restaurant: true },
+        relations: { restaurant: true, ordering: true },
       }),
       this.menuRepository.find({
         where: { branchId, isActive: true },
@@ -156,12 +159,24 @@ export class BotConfigService {
         'whatsappPhoneNumberId is already used by another branch',
       );
     }
+
+    // Un número atiende un solo modo: no puede ser también el de pedidos.
+    if (
+      dto.whatsappPhoneNumberId &&
+      (await this.orderingRepository.exists({
+        where: { phoneNumberId: dto.whatsappPhoneNumberId },
+      }))
+    ) {
+      throw new ConflictException(
+        'whatsappPhoneNumberId is already used by an ordering number',
+      );
+    }
   }
 
   private async findBranch(branchId: string): Promise<Branch> {
     const branch = await this.branchRepository.findOne({
       where: { id: branchId },
-      relations: { restaurant: true },
+      relations: { restaurant: true, ordering: true },
     });
 
     if (!branch) throw new NotFoundException('Branch not found');

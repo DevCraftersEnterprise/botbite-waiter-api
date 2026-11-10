@@ -1,4 +1,5 @@
 import {
+  Check,
   Column,
   Entity,
   Index,
@@ -12,15 +13,24 @@ import { Branch } from '@/modules/branches/entities/branch.entity';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import {
+  FulfillmentStatus,
   OrderSource,
   OrderStatus,
+  OrderType,
   PaymentMethod,
 } from '@/modules/orders/enums/order.enums';
 
-/** La cuenta de una mesa. Cada confirmación del comensal es una ronda. */
+/**
+ * La cuenta de una mesa, o un pedido de recoger o domicilio (`type`). Cada
+ * confirmación del comensal es una ronda.
+ */
 @Entity({ name: 'orders' })
 @Index('IDX_orders_branch_status', ['branchId', 'status'])
 @Index('IDX_orders_branch_opened', ['branchId', 'openedAt'])
+@Index('IDX_orders_branch_fulfillment', ['branchId', 'fulfillmentStatus'], {
+  where: '"fulfillmentStatus" IS NOT NULL',
+})
+@Check('CHK_orders_delivery_fee', `"type" = 'delivery' OR "deliveryFee" = 0`)
 export class Order extends BaseEntity {
   /** Identificador de la cuenta que comparten el mesero y la API. */
   @Index('UQ_orders_code', { unique: true })
@@ -97,6 +107,54 @@ export class Order extends BaseEntity {
   @ManyToOne(() => Branch)
   @JoinColumn({ name: 'branchId' })
   branch: Branch;
+
+  @Column({
+    type: 'enum',
+    enum: OrderType,
+    enumName: 'orders_type_enum',
+    default: OrderType.DINE_IN,
+  })
+  type: OrderType;
+
+  /** Solo recoger y domicilio, desde que se pagan. */
+  @Column({
+    type: 'enum',
+    enum: FulfillmentStatus,
+    enumName: 'orders_fulfillment_status_enum',
+    nullable: true,
+  })
+  fulfillmentStatus: FulfillmentStatus | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  fulfillmentUpdatedAt: Date | null;
+
+  /** Pedido programado: cuándo lo quiere el cliente. */
+  @Column({ type: 'timestamptz', nullable: true })
+  scheduledFor: Date | null;
+
+  /**
+   * Datos de entrega. Solo viven en el pedido, nunca en el cliente, y se
+   * borran 30 días después (OrderingPrivacyService).
+   */
+  @Column({ type: 'varchar', length: 300, nullable: true })
+  deliveryAddress: string | null;
+
+  @Column({ type: 'varchar', length: 300, nullable: true })
+  deliveryReferences: string | null;
+
+  @Column({ type: 'numeric', precision: 9, scale: 6, nullable: true })
+  deliveryLatitude: number | null;
+
+  @Column({ type: 'numeric', precision: 9, scale: 6, nullable: true })
+  deliveryLongitude: number | null;
+
+  /** Lo que cobró el bot; no genera cashback. */
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  deliveryFee: number;
+
+  /** Comisión de BotBite con la que el bot generó el link. */
+  @Column({ type: 'numeric', precision: 5, scale: 2, nullable: true })
+  commissionPct: number | null;
 
   @OneToMany(() => OrderRound, (round) => round.order)
   rounds: OrderRound[];

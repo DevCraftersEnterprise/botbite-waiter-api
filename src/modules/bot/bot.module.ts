@@ -10,15 +10,18 @@ import { Branch } from '@/modules/branches/entities/branch.entity';
 import { CustomersModule } from '@/modules/customers/customers.module';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { NotificationsModule } from '@/modules/notifications/notifications.module';
+import { BranchOrdering } from '@/modules/ordering/entities/branch-ordering.entity';
+import { OrderingModule } from '@/modules/ordering/ordering.module';
 import { Order } from '@/modules/orders/entities/order.entity';
 import { OrdersModule } from '@/modules/orders/orders.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([BotApiKey, Branch, Menu, Order]),
+    TypeOrmModule.forFeature([BotApiKey, Branch, BranchOrdering, Menu, Order]),
     OrdersModule,
     CustomersModule,
     NotificationsModule,
+    OrderingModule,
   ],
   controllers: [BotController, BotAdminController],
   providers: [BotKeysService, BotConfigService, BotKeyGuard],

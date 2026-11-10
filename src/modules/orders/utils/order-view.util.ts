@@ -2,6 +2,7 @@ import { fromCents, toCents } from '@/common/utils/money.util';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
+import { OrderType } from '@/modules/orders/enums/order.enums';
 
 export interface RoundItemView {
   id: string;
@@ -24,6 +25,14 @@ export interface RoundView {
   items: RoundItemView[];
 }
 
+/** Dónde entregar un pedido a domicilio. Se borra 30 días después. */
+export interface DeliveryView {
+  address: string | null;
+  references: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
 export interface OrderView {
   id: string;
   code: string | null;
@@ -40,9 +49,16 @@ export interface OrderView {
   walletDiscount: number;
   total: number;
   tip: number;
-  /** Total más propina: lo que se le cobra al comensal. */
+  /** Total, propina y envío: lo que se le cobra al comensal. */
   amountDue: number;
   paymentMethod: Order['paymentMethod'];
+  type: Order['type'];
+  fulfillmentStatus: Order['fulfillmentStatus'];
+  fulfillmentUpdatedAt: Date | null;
+  scheduledFor: Date | null;
+  deliveryFee: number;
+  commissionPct: number | null;
+  delivery: DeliveryView | null;
   rounds?: RoundView[];
 }
 
@@ -66,6 +82,19 @@ export const toRoundView = (round: OrderRound): RoundView => ({
   items: (round.items ?? []).map(toItemView),
 });
 
+const toNumberOrNull = (value: number | string | null): number | null =>
+  value === null ? null : Number(value);
+
+const toDeliveryView = (order: Order): DeliveryView | null =>
+  order.type === OrderType.DELIVERY
+    ? {
+        address: order.deliveryAddress,
+        references: order.deliveryReferences,
+        latitude: toNumberOrNull(order.deliveryLatitude),
+        longitude: toNumberOrNull(order.deliveryLongitude),
+      }
+    : null;
+
 /** Postgres entrega `numeric` como texto. */
 export const toOrderView = (order: Order): OrderView => ({
   id: order.id,
@@ -83,8 +112,17 @@ export const toOrderView = (order: Order): OrderView => ({
   walletDiscount: Number(order.walletDiscount),
   total: Number(order.total),
   tip: Number(order.tip),
-  amountDue: fromCents(toCents(order.total) + toCents(order.tip)),
+  amountDue: fromCents(
+    toCents(order.total) + toCents(order.tip) + toCents(order.deliveryFee),
+  ),
   paymentMethod: order.paymentMethod,
+  type: order.type,
+  fulfillmentStatus: order.fulfillmentStatus,
+  fulfillmentUpdatedAt: order.fulfillmentUpdatedAt,
+  scheduledFor: order.scheduledFor,
+  deliveryFee: Number(order.deliveryFee),
+  commissionPct: toNumberOrNull(order.commissionPct),
+  delivery: toDeliveryView(order),
   ...(order.rounds && {
     rounds: [...order.rounds]
       .sort((a, b) => a.number - b.number)

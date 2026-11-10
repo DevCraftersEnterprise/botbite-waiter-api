@@ -128,27 +128,35 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 - Cada llave pertenece a una sucursal, y la sucursal siempre sale de la llave. Solo se guarda su hash y se muestra una sola vez.
 - `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si el mesero envía `If-None-Match`, contesta `304` cuando nada cambió. Del restaurante trae también `logoUrl` y `privacyUrl` (null si no hay), y en `features` va `languages`: apagado, el bot atiende solo en español.
 - `POST /v1/bot/orders` abre la cuenta con su primera ronda y `POST /v1/bot/orders/:code/rounds` agrega comandas. Reenviar el mismo `code` o `number` no duplica nada. La API pone los precios con el menú vigente.
-- `PATCH /v1/bot/orders/:code` avanza la cuenta. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina.
+- `PATCH /v1/bot/orders/:code` avanza la cuenta (`status`) o la entrega de un pedido pagado (`fulfillmentStatus`), uno a la vez. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina.
+- Recoger y domicilio usan las mismas rutas: `POST /v1/bot/orders` con `type` (`pickup` o `delivery`), `delivery` (dirección, referencias, punto y costo de envío), `scheduledFor` y `commissionPct`, sin mesa. Se abren al generar el link, y `open` → `payment_link` aplica el monedero. Si el link vence, el bot manda `cancelled` y el saldo vuelve. Al pagarse quedan en `fulfillmentStatus: pending` y caja recibe un solo aviso, sin la dirección.
 - `POST /v1/bot/payments` registra un pago aprobado: cierra la cuenta y abona el cashback. Reenviar el mismo `providerPaymentId` no lo procesa dos veces.
 - `POST /v1/bot/invoices` registra una factura que FacturAPI ya timbró. Reenviar el mismo `providerInvoiceId` no la registra dos veces.
 - `POST /v1/bot/daily-close` cierra las cuentas de WhatsApp que nadie pidió.
 - `POST /v1/bot/customers/lookup` y `PATCH /v1/bot/customers` leen y guardan al comensal. El teléfono va en el cuerpo para que no quede en los logs. Los datos fiscales solo vienen con `includeTaxProfile: true`.
 - `POST /v1/bot/notifications` manda avisos sueltos a caja. Con `eventId` (un UUID que el bot repite en cada reintento) no se duplican: el reintento responde 200 con `created: false`.
+- `PATCH /v1/bot/ordering` con `{ "accepting": false }` pausa los pedidos cuando caja escribe *pausar*, y con `true` los reanuda. Responde 404 si la sucursal no tiene el modo pedidos activo.
 - Las rutas están documentadas en Swagger, en `/docs`.
 
 **Cuentas y comandas:** `orders` es la cuenta de una mesa y `order_rounds` sus comandas. Estados de la cuenta: `open` → `bill_requested` → `payment_link` o `with_waiter` → `paid` o `settled`. También `auto_closed` y `cancelled`. Estados de la comanda: `new` → `preparing` → `delivered`, o `cancelled`. El personal mueve las comandas, cobra las cuentas y abre sus propias cuentas desde el panel; las rondas de una cuenta de WhatsApp solo las agrega el bot.
 
-**Monedero:** `restaurant_customers` guarda al comensal por restaurante y `wallet_movements` cada cambio de saldo. El saldo se comparte entre las sucursales de un restaurante y nunca entre restaurantes. El descuento se aplica una vez al pedir la cuenta, topado al saldo y al subtotal, y se devuelve si se cancela la cuenta o si una comanda cancelada deja la cuenta por debajo del descuento. El cashback se calcula sobre lo consumido, sin propina, y solo al pagar en línea.
+**Pedidos (recoger y domicilio):** viven en `orders` con `type` `pickup` o `delivery`, sin mesa. La entrega va en `fulfillmentStatus`, aparte del estado de la cuenta: `pending` (pagado) → `preparing` → `on_the_way` (domicilio) o `ready` (recoger) → `delivered`. La visita se cuenta al pagar, no al abrir. No salen en Órdenes ni en el cierre diario: el panel los muestra en "Para entregar". La dirección y el punto solo se guardan en el pedido, nunca en el cliente, y `OrderingPrivacyService` los borra cada día a las 4:00 cuando el pedido cumple 30 días sin cambios. El costo de envío y la comisión se guardan como los cobró el bot.
 
-**Pagos:** `payments` guarda todo pago aprobado, aunque no cuadre, porque el dinero ya entró: `approved` cerró la cuenta, `incomplete` llegó de menos y la cuenta sigue abierta, y `unmatched` no tiene cuenta o ya estaba cerrada. En los dos últimos caja recibe una alerta. No se guarda la respuesta cruda de Mercado Pago porque trae datos del pagador.
+**Monedero:** `restaurant_customers` guarda al comensal por restaurante y `wallet_movements` cada cambio de saldo. El saldo se comparte entre las sucursales de un restaurante y nunca entre restaurantes. El descuento se aplica una vez al pedir la cuenta, topado al saldo y al subtotal, y se devuelve si se cancela la cuenta o si una comanda cancelada deja la cuenta por debajo del descuento. El cashback se calcula sobre lo consumido, sin propina ni envío, y solo al pagar en línea.
+
+**Pagos:** `payments` guarda todo pago aprobado, aunque no cuadre, porque el dinero ya entró: `approved` cerró la cuenta, `incomplete` llegó de menos y la cuenta sigue abierta, y `unmatched` no tiene cuenta o ya estaba cerrada. En los dos últimos caja recibe una alerta. Lo que se debía (`amount`) es consumo más propina más envío (`deliveryFee`). No se guarda la respuesta cruda de Mercado Pago porque trae datos del pagador.
 
 **Facturas:** la API no timbra. El servicio del mesero timbra en FacturAPI y registra el resultado en `invoices`, que guarda lo que dice el CFDI (folio, UUID del SAT, RFC, razón social, uso, forma de pago y total sin propina) pero no el correo. Caja recibe un aviso por cada factura y una alerta si una cuenta recibe una segunda. Las facturas con error no se registran: el mesero avisa a caja con `POST /v1/bot/notifications`.
 
 **Datos fiscales:** `customer_tax_profiles` guarda los datos del comensal por restaurante, solo si aceptó guardarlos y en la misma transacción que una factura timbrada. Una factura nueva con permiso los reemplaza, y `PATCH /v1/bot/customers` con `deleteTaxProfile: true` los borra de la base, sin `deletedAt`.
 
+**Para entregar:** `GET /v1/orders/to-deliver?branchId=<id>` devuelve los pedidos pagados que faltan por entregar, con la dirección y el teléfono del cliente: primero los programados por su hora y los demás por la hora de pago. `PATCH /v1/orders/:id/fulfillment` con `{ status }` los avanza y le avisa al bot. Los ven el dueño, los admins y el personal de la sucursal.
+
+**Cancelar un pedido pagado:** `POST /v1/orders/:id/cancel-paid`, solo el dueño o un admin, mientras no se haya entregado. Devuelve el saldo que se usó, quita el cashback ganado (sin dejar el monedero en negativo), manda una alerta a caja con el monto a reembolsar y avisa al bot con `order.cancelled`. Por ahora el reembolso en Mercado Pago se hace a mano; los totales del pedido no cambian.
+
 **Cobros en el panel:** `GET /v1/orders/billing?branchId=<id>&date=YYYY-MM-DD` devuelve los pagos en línea y las facturas de un día en la zona horaria de la sucursal; sin `date`, los de hoy. La ven el dueño, los admins y el personal de la sucursal.
 
-**Avisos al mesero:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, restaurantSlug, branchSlug, occurredAt, data }`. Si `botBaseUrl` trae query (por ejemplo `?negocio=punto-de-union`), se conserva: `https://mesero/portal-evento?negocio=punto-de-union`. Los tipos son `round.status_changed`, `order.closed` y `catalog.changed`. Este último sale al cambiar productos, menús o categorías y al guardar el Mesero digital, la sucursal o el restaurante; no trae datos, así que el mesero vuelve a leer `GET /v1/bot/branch`. Son de mejor esfuerzo: se reintentan y, si el mesero no responde, solo se registra.
+**Avisos al mesero:** la API hace `POST <botBaseUrl>/portal-evento` con `{ type, branchId, restaurantSlug, branchSlug, occurredAt, data }`. Si `botBaseUrl` trae query (por ejemplo `?negocio=punto-de-union`), se conserva: `https://mesero/portal-evento?negocio=punto-de-union`. Los tipos son `round.status_changed`, `order.closed`, `order.fulfillment_changed`, `order.cancelled` y `catalog.changed`. `order.cancelled` sale cuando el dueño cancela un pedido pagado, con `orderCode`, `orderType`, `language`, `phone`, `refundAmount` y `providerPaymentId`. `order.fulfillment_changed` sale cuando caja mueve un pedido en "Para entregar" (no cuando lo mueve el bot), con `orderCode`, `orderType`, `fulfillmentStatus`, `language` y `phone`. Este último sale al cambiar productos, menús o categorías y al guardar el Mesero digital, la sucursal o el restaurante; no trae datos, así que el mesero vuelve a leer `GET /v1/bot/branch`. Son de mejor esfuerzo: se reintentan y, si el mesero no responde, solo se registra.
 
 Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<cuerpo>` con `BOT_WEBHOOK_SECRET` y lo compara con `X-BotBite-Signature: sha256=<hex>`.
 
@@ -159,9 +167,14 @@ Para validarlos, el mesero recalcula el HMAC-SHA256 de `<X-BotBite-Timestamp>.<c
 | `GET`, `PATCH` | `/v1/branches/:restaurantId/:branchId/bot-config` | Dueño o admin. Slug, `phone_number_id`, URL del mesero y funciones contratadas: solo admin |
 | `GET`, `POST` | `/v1/branches/:restaurantId/:branchId/bot-keys` | Solo admin |
 | `DELETE` | `/v1/branches/:restaurantId/:branchId/bot-keys/:keyId` | Solo admin |
+| `GET` | `/v1/branches/:restaurantId/:branchId/ordering` | Dueño, admin o personal de la sucursal. `{ ordering: null }` si nunca se configuró |
+| `PATCH` | `/v1/branches/:restaurantId/:branchId/ordering` | Dueño o admin. Activarlo, el número de pedidos y la comisión: solo admin |
+| `PATCH` | `/v1/branches/:restaurantId/:branchId/ordering/accepting` | Dueño, admin o personal de la sucursal: el interruptor "Recibiendo pedidos" |
 | `PATCH`, `DELETE` | `/v1/restaurants/:restaurantId/logo` | Dueño o admin. Sube (PNG, JPG o WebP; Cloudinary lo deja cuadrado) o quita el logo |
 
 El aviso de privacidad del restaurante es `privacyUrl` en `PATCH /v1/restaurants/:restaurantId` (https; `null` lo quita). El bot muestra siempre el de BotBite y agrega este si existe.
+
+**Modo pedidos:** `branch_ordering` guarda, por sucursal, lo que necesita el número de pedidos (recoger y domicilio con pago por adelantado): su número de WhatsApp, los tipos, la tarifa de envío, las zonas sin entrega, el horario, los pedidos programados, la comisión de BotBite y el interruptor "Recibiendo pedidos". El bot lo lee en `branch.ordering` de `GET /v1/bot/branch` (null si la sucursal no lo tiene) y comparte con el mesero la llave, la URL base y el catálogo. Para activarlo hacen falta el `phoneNumberId` y el teléfono, y para el envío a domicilio, las coordenadas de la sucursal. Un número de WhatsApp atiende una sola sucursal y un solo modo: no puede ser a la vez el del mesero y el de pedidos. Al guardar se manda `catalog.changed`.
 
 **Slugs:** el del restaurante es único en la plataforma y sale de su nombre (`punto-de-union`). El de la sucursal sigue el estándar `<restaurante>-<sucursal>` (`punto-de-union-cocorit`): se genera al crearla y, si un admin lo cambia, debe empezar con el del restaurante. Cambiar el slug de un restaurante no renombra sus sucursales, porque el QR impreso y el webhook dependen de ellos.
 
@@ -238,6 +251,9 @@ Las e2e levantan la app completa contra Postgres real. Cubren:
 - multi-tenant y personal;
 - categorías por restaurante y slugs;
 - configuración del mesero, llaves y `GET /v1/bot/branch`;
+- ajustes del modo pedidos, sus permisos y el interruptor "Recibiendo pedidos";
+- pedidos de recoger y domicilio: monedero, pago con envío, "Para entregar", cancelación sin pagar y borrado de direcciones;
+- cancelación de pedidos pagados: saldo, cashback, alerta a caja y aviso al bot;
 - cuentas, rondas y sus estados, con carga simultánea y reintentos;
 - avisos firmados al mesero, contra un servidor local;
 - notificaciones;

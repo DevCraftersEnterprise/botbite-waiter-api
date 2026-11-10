@@ -32,7 +32,10 @@ export class Payment extends BaseEntity {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   tip: number;
 
-  /** Lo que debía la cuenta: consumo más propina. */
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  deliveryFee: number;
+
+  /** Lo que debía la cuenta: consumo, propina y envío. */
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
   amount: number;
 

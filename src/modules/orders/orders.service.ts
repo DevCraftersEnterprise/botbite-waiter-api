@@ -7,7 +7,10 @@ import { Order } from '@/modules/orders/entities/order.entity';
 import { Payment } from '@/modules/orders/entities/payment.entity';
 import {
   ACTIVE_ORDER_STATUSES,
+  OPEN_FULFILLMENT_STATUSES,
+  ORDERING_TYPES,
   OrderStatus,
+  OrderType,
 } from '@/modules/orders/enums/order.enums';
 import { findAllOrdersUseCase } from '@/modules/orders/use-cases/orders/find-all-orders.use-case';
 import { findOneOrderUseCase } from '@/modules/orders/use-cases/orders/find-one-order.use-case';
@@ -71,13 +74,21 @@ export class OrdersService {
     });
   }
 
-  /** Una cuenta pagada sigue visible mientras cocina tenga comandas por entregar. */
+  /**
+   * Una cuenta pagada sigue visible mientras cocina tenga comandas por entregar.
+   * Solo cuentas de mesa: los pedidos van en "Para entregar".
+   */
   findActive(branchId: string): Promise<Order[]> {
     return this.orderRepository.find({
       where: [
-        { branchId, status: In(ACTIVE_ORDER_STATUSES) },
         {
           branchId,
+          type: OrderType.DINE_IN,
+          status: In(ACTIVE_ORDER_STATUSES),
+        },
+        {
+          branchId,
+          type: OrderType.DINE_IN,
           status: OrderStatus.PAID,
           id: Raw(
             (alias) =>
@@ -88,6 +99,26 @@ export class OrdersService {
       relations: { rounds: { items: true } },
       order: { openedAt: 'ASC' },
     });
+  }
+
+  /**
+   * "Para entregar": pedidos de recoger y domicilio pagados que no se han
+   * entregado. Primero lo que hay que entregar antes: los programados por su
+   * hora y los demás por la hora en que se pagaron.
+   */
+  async findToDeliver(branchId: string): Promise<Order[]> {
+    const orders = await this.orderRepository.find({
+      where: {
+        branchId,
+        type: In(ORDERING_TYPES),
+        fulfillmentStatus: In(OPEN_FULFILLMENT_STATUSES),
+      },
+      relations: { rounds: { items: true }, customer: true },
+    });
+    const dueAt = (order: Order): number =>
+      (order.scheduledFor ?? order.closedAt ?? order.openedAt).getTime();
+
+    return orders.sort((a, b) => dueAt(a) - dueAt(b));
   }
 
   async summary(branchId: string): Promise<OrdersSummary> {

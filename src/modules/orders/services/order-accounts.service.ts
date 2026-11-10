@@ -26,16 +26,23 @@ import { NotificationsService } from '@/modules/notifications/notifications.serv
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
+import { Payment } from '@/modules/orders/entities/payment.entity';
+import { BranchOrdering } from '@/modules/ordering/entities/branch-ordering.entity';
 import {
   ACTIVE_ORDER_STATUSES,
+  FulfillmentStatus,
+  OPEN_FULFILLMENT_STATUSES,
   OrderSource,
   OrderStatus,
+  OrderType,
   PaymentMethod,
+  PaymentStatus,
   RoundStatus,
 } from '@/modules/orders/enums/order.enums';
 import {
   billMessage,
   dailyCloseMessage,
+  paidOrderCancelledMessage,
   payWithWaiterMessage,
   roundMessage,
 } from '@/modules/orders/utils/order-messages.util';
@@ -48,12 +55,26 @@ export interface RoundItemInput {
   note?: string;
 }
 
+export interface DeliveryInput {
+  address: string;
+  references?: string;
+  latitude: number;
+  longitude: number;
+  fee: number;
+}
+
 export interface OpenAccountInput {
   branchId: string;
   /** Lo genera el mesero; las cuentas del personal lo reciben aquí. */
   code?: string;
   source: OrderSource;
-  table: string;
+  /** Sin tipo es una cuenta de mesa. */
+  type?: OrderType;
+  /** Solo las cuentas de mesa la llevan. */
+  table?: string;
+  scheduledFor?: string;
+  delivery?: DeliveryInput;
+  commissionPct?: number;
   customerName?: string;
   phone?: string;
   language?: string;
@@ -76,6 +97,12 @@ export interface BotOrderUpdate {
   tip?: number;
 }
 
+export interface CancelPaidResult {
+  order: Order;
+  /** El pago a reembolsar. null si no se encontró. */
+  payment: Payment | null;
+}
+
 export interface BotOrderResult {
   order: Order;
   /** Saldo que le queda al comensal. Vacío si la cuenta no tiene cliente. */
@@ -95,6 +122,54 @@ export const BOT_TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
   [OrderStatus.WITH_WAITER]: [OrderStatus.PAYMENT_LINK],
 };
 
+/**
+ * Recoger y domicilio: el monedero se aplica al salir de `open` y el bot los
+ * cancela mientras no se paguen (link vencido o carrito cambiado).
+ */
+export const ORDERING_BOT_TRANSITIONS: Partial<
+  Record<OrderStatus, OrderStatus[]>
+> = {
+  [OrderStatus.OPEN]: [
+    OrderStatus.BILL_REQUESTED,
+    OrderStatus.PAYMENT_LINK,
+    OrderStatus.CANCELLED,
+  ],
+  [OrderStatus.BILL_REQUESTED]: [
+    OrderStatus.PAYMENT_LINK,
+    OrderStatus.CANCELLED,
+  ],
+  [OrderStatus.PAYMENT_LINK]: [OrderStatus.CANCELLED],
+};
+
+const DELIVERY_STEPS = [
+  FulfillmentStatus.ON_THE_WAY,
+  FulfillmentStatus.DELIVERED,
+];
+const PICKUP_STEPS = [FulfillmentStatus.READY, FulfillmentStatus.DELIVERED];
+
+/** A dónde avanza la entrega. "En preparación" se puede saltar. */
+export const fulfillmentTransitions = (
+  type: OrderType,
+  from: FulfillmentStatus,
+): FulfillmentStatus[] => {
+  const [handOff, delivered] =
+    type === OrderType.DELIVERY ? DELIVERY_STEPS : PICKUP_STEPS;
+
+  switch (from) {
+    case FulfillmentStatus.PENDING:
+      return [FulfillmentStatus.PREPARING, handOff];
+    case FulfillmentStatus.PREPARING:
+      return [handOff];
+    case FulfillmentStatus.ON_THE_WAY:
+    case FulfillmentStatus.READY:
+      return from === handOff ? [delivered] : [];
+    default:
+      return [];
+  }
+};
+
+export type FulfillmentOrigin = 'bot' | 'panel';
+
 export const ROUND_TRANSITIONS: Record<RoundStatus, RoundStatus[]> = {
   [RoundStatus.NEW]: [
     RoundStatus.PREPARING,
@@ -104,6 +179,25 @@ export const ROUND_TRANSITIONS: Record<RoundStatus, RoundStatus[]> = {
   [RoundStatus.PREPARING]: [RoundStatus.DELIVERED, RoundStatus.CANCELLED],
   [RoundStatus.DELIVERED]: [],
   [RoundStatus.CANCELLED]: [],
+};
+
+/** Lo que solo aplica a recoger y domicilio, o solo a domicilio. */
+const assertOrderInput = (type: OrderType, input: OpenAccountInput): void => {
+  const isOrdering = type !== OrderType.DINE_IN;
+
+  if (
+    !isOrdering &&
+    (input.scheduledFor || input.commissionPct !== undefined)
+  ) {
+    throw new BadRequestException(
+      'scheduledFor and commissionPct are only for pickup and delivery',
+    );
+  }
+  if ((type === OrderType.DELIVERY) !== Boolean(input.delivery)) {
+    throw new BadRequestException(
+      'delivery is required for delivery orders, and only for them',
+    );
+  }
 };
 
 /** Código de las cuentas que abre el personal. Las del mesero empiezan con C. */
@@ -129,6 +223,9 @@ export class OrderAccountsService {
   /** Abre la cuenta con su primera ronda. Reintentar con el mismo código no duplica. */
   async openAccount(input: OpenAccountInput): Promise<RoundResult> {
     const code = input.code ?? generateStaffCode();
+    const type = input.type ?? OrderType.DINE_IN;
+    const isOrdering = type !== OrderType.DINE_IN;
+    assertOrderInput(type, input);
 
     let result: RoundResult;
     try {
@@ -136,18 +233,26 @@ export class OrderAccountsService {
         const existing = await manager.findOne(Order, { where: { code } });
         if (existing) return this.replay(manager, existing, input.branchId);
 
-        const tableLabel = await this.acceptTable(
-          manager,
-          input.branchId,
-          input.table,
-        );
+        const tableLabel = isOrdering
+          ? await this.assertOrderingType(manager, input.branchId, type)
+          : await this.acceptTable(manager, input.branchId, input.table ?? '');
 
         const order = await manager.save(
           manager.create(Order, {
             code,
             branchId: input.branchId,
             source: input.source,
+            type,
             tableLabel,
+            scheduledFor: input.scheduledFor
+              ? new Date(input.scheduledFor)
+              : null,
+            deliveryAddress: input.delivery?.address.trim() ?? null,
+            deliveryReferences: input.delivery?.references?.trim() || null,
+            deliveryLatitude: input.delivery?.latitude ?? null,
+            deliveryLongitude: input.delivery?.longitude ?? null,
+            deliveryFee: input.delivery?.fee ?? 0,
+            commissionPct: input.commissionPct ?? null,
             customerName: input.customerName || null,
             language: input.language ?? 'es',
             locationVerified: input.locationVerified ?? false,
@@ -161,12 +266,13 @@ export class OrderAccountsService {
           }),
         );
 
+        // En recoger y domicilio la visita se cuenta al pagar.
         if (order.customerId) {
           await this.customers.registerVisit(
             manager,
             input.branchId,
             order.customerId,
-            !input.afterPreviousBill,
+            !isOrdering && !input.afterPreviousBill,
           );
         }
 
@@ -184,7 +290,8 @@ export class OrderAccountsService {
       });
     }
 
-    if (result.created) {
+    // Caja se entera de un pedido hasta que se paga.
+    if (result.created && !isOrdering) {
       await this.announceRound(result, {
         phone: input.phone,
         locationUnverified:
@@ -226,7 +333,9 @@ export class OrderAccountsService {
       return this.addRoundTo(manager, order, number, items);
     });
 
-    if (result.created) await this.announceRound(result);
+    if (result.created && result.order.type === OrderType.DINE_IN) {
+      await this.announceRound(result);
+    }
 
     return result;
   }
@@ -277,17 +386,39 @@ export class OrderAccountsService {
           return { order: locked, changed: false, walletCapped: false };
         }
 
-        if (!BOT_TRANSITIONS[locked.status]?.includes(status)) {
+        const isOrdering = locked.type !== OrderType.DINE_IN;
+        const transitions = isOrdering
+          ? ORDERING_BOT_TRANSITIONS
+          : BOT_TRANSITIONS;
+
+        if (!transitions[locked.status]?.includes(status)) {
           throw new ConflictException(
             `The account cannot go from ${locked.status} to ${status}`,
           );
         }
 
+        // Mesa: al pedir la cuenta. Pedidos: al salir de `open`.
+        const appliesWallet = isOrdering
+          ? locked.status === OrderStatus.OPEN &&
+            status !== OrderStatus.CANCELLED
+          : status === OrderStatus.BILL_REQUESTED;
+
         locked.status = status;
         let walletCapped = false;
         if (status === OrderStatus.BILL_REQUESTED) {
           locked.billRequestedAt = new Date();
+        }
+        if (appliesWallet) {
           walletCapped = await this.useWallet(manager, locked, update);
+        }
+        if (status === OrderStatus.CANCELLED) {
+          locked.closedAt = new Date();
+          await this.returnWallet(
+            manager,
+            locked,
+            toCents(locked.walletDiscount),
+            'Pedido cancelado',
+          );
         }
         if (status === OrderStatus.WITH_WAITER) {
           locked.paymentMethod = PaymentMethod.WAITER;
@@ -307,7 +438,11 @@ export class OrderAccountsService {
       },
     );
 
-    if (changed) await this.announceStatus(order);
+    if (changed && order.type === OrderType.DINE_IN) {
+      await this.announceStatus(order);
+    } else if (changed) {
+      this.ordersGateway.emitOrderUpdate(order.branchId);
+    }
 
     return {
       order,
@@ -317,6 +452,70 @@ export class OrderAccountsService {
       ),
       walletCapped,
     };
+  }
+
+  /**
+   * Avance de la entrega de un pedido pagado. Repetir el estado actual no hace
+   * nada. Si lo cambia el panel, se le avisa al bot para que avise al cliente.
+   */
+  async updateFulfillment(
+    where: FindOptionsWhere<Order>,
+    status: FulfillmentStatus,
+    origin: FulfillmentOrigin,
+  ): Promise<Order> {
+    const { order, changed } = await this.dataSource.transaction(
+      async (manager) => {
+        const locked = await this.lockOrder(manager, where);
+
+        if (!locked.fulfillmentStatus) {
+          throw new ConflictException(
+            locked.type === OrderType.DINE_IN
+              ? 'Only pickup and delivery orders have a delivery status'
+              : 'The order is not paid yet',
+          );
+        }
+
+        if (locked.fulfillmentStatus === status) {
+          return { order: locked, changed: false };
+        }
+
+        if (
+          !fulfillmentTransitions(
+            locked.type,
+            locked.fulfillmentStatus,
+          ).includes(status)
+        ) {
+          throw new ConflictException(
+            `The order cannot go from ${locked.fulfillmentStatus} to ${status}`,
+          );
+        }
+
+        locked.fulfillmentStatus = status;
+        locked.fulfillmentUpdatedAt = new Date();
+
+        return { order: await manager.save(locked), changed: true };
+      },
+    );
+
+    if (changed) {
+      this.ordersGateway.emitOrderUpdate(order.branchId);
+
+      if (origin === 'panel') {
+        this.botEventsService.emit(
+          order.branchId,
+          'order.fulfillment_changed',
+          {
+            orderCode: order.code,
+            orderType: order.type,
+            fulfillmentStatus: order.fulfillmentStatus,
+            language: order.language,
+            phone: await this.customers.phoneOf(order.customerId),
+          },
+        );
+      }
+    }
+
+    return order;
   }
 
   /** Caja cambia el estado de una comanda. */
@@ -395,6 +594,64 @@ export class OrderAccountsService {
   }
 
   /**
+   * El dueño cancela un pedido de recoger o domicilio ya pagado y sin entregar.
+   * Devuelve el saldo que se usó, quita el cashback que ganó (sin dejar el saldo
+   * en negativo) y avisa a caja y al bot. El reembolso en Mercado Pago lo hace
+   * caja a mano mientras el bot no lo haga solo.
+   */
+  async cancelPaidOrder(orderId: string): Promise<CancelPaidResult> {
+    const result = await this.dataSource.transaction(async (manager) => {
+      const locked = await this.lockOrder(manager, { id: orderId });
+
+      if (
+        locked.type === OrderType.DINE_IN ||
+        locked.status !== OrderStatus.PAID ||
+        !locked.fulfillmentStatus ||
+        !OPEN_FULFILLMENT_STATUSES.includes(locked.fulfillmentStatus)
+      ) {
+        throw new ConflictException(
+          'Only paid pickup and delivery orders that were not delivered can be cancelled',
+        );
+      }
+
+      const payment = await manager.findOne(Payment, {
+        where: { orderId: locked.id, status: PaymentStatus.APPROVED },
+        order: { paidAt: 'DESC' },
+      });
+
+      await this.undoWallet(manager, locked, payment);
+
+      locked.status = OrderStatus.CANCELLED;
+      locked.fulfillmentStatus = FulfillmentStatus.CANCELLED;
+      locked.fulfillmentUpdatedAt = new Date();
+
+      return { order: await manager.save(locked), payment };
+    });
+
+    const { order, payment } = result;
+    const phone = await this.customers.phoneOf(order.customerId);
+
+    await this.notificationsService.create({
+      branchId: order.branchId,
+      type: NotificationType.ALERT,
+      message: paidOrderCancelledMessage(order, payment),
+      phoneNumber: phone ?? undefined,
+      orderId: order.id,
+    });
+    this.ordersGateway.emitOrderUpdate(order.branchId);
+    this.botEventsService.emit(order.branchId, 'order.cancelled', {
+      orderCode: order.code,
+      orderType: order.type,
+      language: order.language,
+      phone,
+      refundAmount: payment ? Number(payment.paidAmount) : 0,
+      providerPaymentId: payment?.providerPaymentId ?? null,
+    });
+
+    return result;
+  }
+
+  /**
    * Cierre diario: el mesero borra esa noche las sesiones, así que nadie pedirá esas
    * cuentas. Solo las de WhatsApp sin cuenta pedida: las que ya tienen un cobro en
    * curso y las del personal las cierra caja.
@@ -402,10 +659,12 @@ export class OrderAccountsService {
   async closeDay(branchId: string): Promise<Order[]> {
     const orders = await this.dataSource.transaction(async (manager) => {
       const open = await manager.find(Order, {
+        // Los pedidos sin pagar los cancela el bot cuando vence su link.
         where: {
           branchId,
           status: OrderStatus.OPEN,
           source: OrderSource.WHATSAPP,
+          type: OrderType.DINE_IN,
         },
         lock: { mode: 'pessimistic_write' },
       });
@@ -468,6 +727,27 @@ export class OrderAccountsService {
     return order;
   }
 
+  /** Los pedidos solo se abren si la sucursal tiene ese tipo activo. Sin mesa. */
+  private async assertOrderingType(
+    manager: EntityManager,
+    branchId: string,
+    type: OrderType,
+  ): Promise<null> {
+    const ordering = await manager.findOne(BranchOrdering, {
+      where: { branchId },
+      select: { id: true, enabled: true, types: true },
+    });
+
+    if (!ordering?.enabled) {
+      throw new ConflictException('Ordering is not enabled for this branch');
+    }
+    if (!ordering.types.includes(type)) {
+      throw new BadRequestException(`This branch does not take ${type} orders`);
+    }
+
+    return null;
+  }
+
   /** La mesa debe estar en la lista de la sucursal, si tiene una. */
   private async acceptTable(
     manager: EntityManager,
@@ -526,6 +806,48 @@ export class OrderAccountsService {
     }
 
     return wanted > balance;
+  }
+
+  /**
+   * Deshace lo que el pedido movió en el monedero. Los totales del pedido no
+   * cambian: siguen diciendo lo que se cobró.
+   */
+  private async undoWallet(
+    manager: EntityManager,
+    order: Order,
+    payment: Payment | null,
+  ): Promise<void> {
+    if (!order.customerId) return;
+
+    const used = toCents(order.walletDiscount);
+    const earned = payment ? toCents(payment.cashbackEarned) : 0;
+    if (used <= 0 && earned <= 0) return;
+
+    const membership = await this.customers.lockMembership(
+      manager,
+      order.branchId,
+      order.customerId,
+    );
+
+    if (used > 0) {
+      await this.customers.moveWallet(manager, membership, {
+        type: WalletMovementType.ADJUSTMENT,
+        cents: used,
+        orderId: order.id,
+        note: 'Pedido cancelado: saldo usado',
+      });
+    }
+
+    // Si ya gastó el cashback, se quita lo que quede: nunca queda en negativo.
+    const clawback = Math.min(earned, toCents(membership.walletBalance));
+    if (clawback > 0) {
+      await this.customers.moveWallet(manager, membership, {
+        type: WalletMovementType.ADJUSTMENT,
+        cents: -clawback,
+        orderId: order.id,
+        note: 'Pedido cancelado: cashback',
+      });
+    }
   }
 
   /** Regresa al monedero saldo que ya se había descontado de la cuenta. */
