@@ -1,5 +1,11 @@
 import { Invoice } from '@/modules/orders/entities/invoice.entity';
+import { Order } from '@/modules/orders/entities/order.entity';
 import { Payment } from '@/modules/orders/entities/payment.entity';
+import {
+  OrderStatus,
+  OrderType,
+  PaymentStatus,
+} from '@/modules/orders/enums/order.enums';
 
 export interface PaymentView {
   id: string;
@@ -7,6 +13,13 @@ export interface PaymentView {
   status: Payment['status'];
   orderCode: string | null;
   table: string | null;
+  /** Mesa, recoger o domicilio. null: el pago no tiene cuenta. */
+  orderType: OrderType | null;
+  /**
+   * Se aprobó, pero la cuenta se canceló después (un pedido pagado que el
+   * dueño canceló): ese dinero se devuelve y no cuenta como cobrado.
+   */
+  toRefund: boolean;
   consumption: number;
   tip: number;
   /** Lo que debía la cuenta. */
@@ -25,6 +38,7 @@ export interface InvoiceView {
   uuid: string;
   orderCode: string | null;
   table: string | null;
+  orderType: OrderType | null;
   rfc: string;
   legalName: string;
   cfdiUse: string;
@@ -33,6 +47,10 @@ export interface InvoiceView {
   emailSent: boolean;
 }
 
+const isRefundPending = (payment: Payment, order: Order | null): boolean =>
+  payment.status === PaymentStatus.APPROVED &&
+  order?.status === OrderStatus.CANCELLED;
+
 /** Postgres entrega `numeric` como texto. */
 export const toPaymentView = (payment: Payment): PaymentView => ({
   id: payment.id,
@@ -40,6 +58,8 @@ export const toPaymentView = (payment: Payment): PaymentView => ({
   status: payment.status,
   orderCode: payment.order?.code ?? null,
   table: payment.order?.tableLabel ?? null,
+  orderType: payment.order?.type ?? null,
+  toRefund: isRefundPending(payment, payment.order ?? null),
   consumption: Number(payment.consumption),
   tip: Number(payment.tip),
   amount: Number(payment.amount),
@@ -56,6 +76,7 @@ export const toInvoiceView = (invoice: Invoice): InvoiceView => ({
   uuid: invoice.uuid,
   orderCode: invoice.order?.code ?? null,
   table: invoice.order?.tableLabel ?? null,
+  orderType: invoice.order?.type ?? null,
   rfc: invoice.rfc,
   legalName: invoice.legalName,
   cfdiUse: invoice.cfdiUse,
