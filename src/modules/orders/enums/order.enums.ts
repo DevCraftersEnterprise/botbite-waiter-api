@@ -36,6 +36,27 @@ export enum OrderType {
 /** Los tipos que atiende el número de pedidos. */
 export const ORDERING_TYPES = [OrderType.PICKUP, OrderType.DELIVERY] as const;
 
+/** Entrega de un pedido de recoger o domicilio. Empieza al pagarse. */
+export enum FulfillmentStatus {
+  /** Pagado: caja aún no lo empieza. */
+  PENDING = 'pending',
+  PREPARING = 'preparing',
+  /** Solo domicilio. */
+  ON_THE_WAY = 'on_the_way',
+  /** Solo recoger. */
+  READY = 'ready',
+  DELIVERED = 'delivered',
+  CANCELLED = 'cancelled',
+}
+
+/** Los que siguen en "Para entregar". */
+export const OPEN_FULFILLMENT_STATUSES = [
+  FulfillmentStatus.PENDING,
+  FulfillmentStatus.PREPARING,
+  FulfillmentStatus.ON_THE_WAY,
+  FulfillmentStatus.READY,
+];
+
 export enum OrderSource {
   WHATSAPP = 'whatsapp',
   /** La abrió el personal desde el panel. */

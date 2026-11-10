@@ -1,7 +1,9 @@
 import { ApiProperty } from '@nestjs/swagger';
 import {
+  FulfillmentStatus,
   OrderSource,
   OrderStatus,
+  OrderType,
   PaymentMethod,
   RoundStatus,
 } from '@/modules/orders/enums/order.enums';
@@ -52,6 +54,20 @@ export class BotRound {
   items: BotRoundItem[];
 }
 
+export class BotDelivery {
+  @ApiProperty({ type: String, nullable: true })
+  address: string | null;
+
+  @ApiProperty({ type: String, nullable: true })
+  references: string | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  latitude: number | null;
+
+  @ApiProperty({ type: Number, nullable: true })
+  longitude: number | null;
+}
+
 export class BotOrder {
   @ApiProperty({ format: 'uuid' })
   id: string;
@@ -98,11 +114,40 @@ export class BotOrder {
   @ApiProperty({ example: 0 })
   tip: number;
 
-  @ApiProperty({ example: 210, description: 'Total más propina' })
+  @ApiProperty({ example: 210, description: 'Total, propina y envío' })
   amountDue: number;
 
   @ApiProperty({ enum: PaymentMethod, nullable: true })
   paymentMethod: PaymentMethod | null;
+
+  @ApiProperty({ enum: OrderType })
+  type: OrderType;
+
+  @ApiProperty({
+    enum: FulfillmentStatus,
+    nullable: true,
+    description: 'Solo recoger y domicilio, desde que se pagan',
+  })
+  fulfillmentStatus: FulfillmentStatus | null;
+
+  @ApiProperty({ type: Date, nullable: true })
+  fulfillmentUpdatedAt: Date | null;
+
+  @ApiProperty({ type: Date, nullable: true })
+  scheduledFor: Date | null;
+
+  @ApiProperty({ example: 0 })
+  deliveryFee: number;
+
+  @ApiProperty({ type: Number, nullable: true, example: 0.5 })
+  commissionPct: number | null;
+
+  @ApiProperty({
+    type: BotDelivery,
+    nullable: true,
+    description: 'Solo domicilio. La dirección se borra 30 días después',
+  })
+  delivery: BotDelivery | null;
 }
 
 export class BotRoundResponse {

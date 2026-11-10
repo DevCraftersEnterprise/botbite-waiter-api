@@ -17,7 +17,8 @@ const CATALOG_DEBOUNCE_MS = 2_000;
 export type BotEventType =
   | 'catalog.changed'
   | 'round.status_changed'
-  | 'order.closed';
+  | 'order.closed'
+  | 'order.fulfillment_changed';
 
 export interface CatalogScope {
   branchId?: string;
