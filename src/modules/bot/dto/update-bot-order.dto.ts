@@ -77,4 +77,15 @@ export class UpdateBotOrderDto {
   @Min(0)
   @Max(99_999)
   tip?: number;
+
+  @ApiPropertyOptional({
+    example: 0.5,
+    description:
+      'Solo con `payment_link`: la comisión de BotBite (`marketplace_fee`, en %) con la que el bot generó el link. Mesa: `branch.commissionPct`. Recoger y domicilio: `branch.ordering.commissionPct`. Queda guardada en la cuenta.',
+  })
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  commissionPct?: number;
 }

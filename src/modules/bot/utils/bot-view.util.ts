@@ -35,6 +35,8 @@ export const toBotBranchConfig = (branch: Branch): BotBranchConfig => ({
   maxRecommendations: branch.maxRecommendations,
   timezone: branch.timezone,
   dailyCloseTime: branch.dailyCloseTime.slice(0, 5),
+  hours: branch.hours ?? [],
+  commissionPct: Number(branch.commissionPct ?? 0),
   surveyUrl: branch.surveyUrl,
   // Una función nueva vale su valor por defecto hasta que se guarde.
   features: { ...DEFAULT_BRANCH_FEATURES, ...branch.features },
