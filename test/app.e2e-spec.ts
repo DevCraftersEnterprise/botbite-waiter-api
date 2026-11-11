@@ -848,6 +848,15 @@ describe('BotBite API (e2e)', () => {
         .set(auth(owner))
         .expect(200);
       expect(changed.body.config.timezone).toBe('America/Mexico_City');
+      // La lista la trae: Editar sucursal no debe regresarla a la de por defecto.
+      const list = await http()
+        .get(`/v1/branches/restaurant/${seed.restaurantA.id}`)
+        .set(auth(owner))
+        .expect(200);
+      const listed = (
+        list.body.branches as { id: string; timezone: string }[]
+      ).find((branch) => branch.id === seed.branchA.id);
+      expect(listed?.timezone).toBe('America/Mexico_City');
 
       await http()
         .patch(branchUrl)

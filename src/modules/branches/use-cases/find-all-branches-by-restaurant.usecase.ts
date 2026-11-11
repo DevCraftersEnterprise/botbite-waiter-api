@@ -67,6 +67,12 @@ export class FindAllBranchesByRestaurantUseCase {
         slug: true,
         // El panel marca las sucursales que no verifican la ubicación.
         verifyLocation: true,
+        // Editar sucursal la muestra; sin ella, el formulario la regresaría
+        // a la de por defecto al guardar.
+        timezone: true,
+        // El mapa de las zonas sin entrega se centra en la sucursal.
+        latitude: true,
+        longitude: true,
         createdAt: true,
         restaurant: {
           name: true,
