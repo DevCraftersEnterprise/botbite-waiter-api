@@ -782,9 +782,90 @@ describe('BotBite API (e2e)', () => {
         { timezone: 'Marte/Olympus' },
         { botBaseUrl: 'http://sin-https.test' },
         { features: { desconocida: true } },
+        { commissionPct: -1 },
+        { commissionPct: 100.5 },
+        { commissionPct: 0.555 },
+        { hours: [{ days: [7], opens: '13:00', closes: '23:00' }] },
+        { hours: [{ days: [], opens: '13:00', closes: '23:00' }] },
+        { hours: [{ days: [1], opens: '1pm', closes: '23:00' }] },
       ]) {
         await http().patch(configUrl()).set(auth(admin)).send(body).expect(400);
       }
+    });
+
+    it('only an admin changes the BotBite commission of the waiter; the owner sees it', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const admin = await tokenFor(seed.superUser.email);
+
+      const before = await http().get(configUrl()).set(auth(owner)).expect(200);
+      expect(before.body.config.commissionPct).toBe(0);
+
+      await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ commissionPct: 0 })
+        .expect(403);
+
+      const res = await http()
+        .patch(configUrl())
+        .set(auth(admin))
+        .send({ commissionPct: 0.5 })
+        .expect(200);
+      expect(res.body.config.commissionPct).toBe(0.5);
+
+      const seen = await http().get(configUrl()).set(auth(owner)).expect(200);
+      expect(seen.body.config.commissionPct).toBe(0.5);
+    });
+
+    it('the owner sets the waiter hours, which can cross midnight', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const hours = [
+        { days: [1, 2, 3, 4, 5, 6], opens: '13:00', closes: '01:00' },
+        { days: [0], opens: '13:00', closes: '20:00' },
+      ];
+
+      const res = await http()
+        .patch(configUrl())
+        .set(auth(owner))
+        .send({ hours })
+        .expect(200);
+      expect(res.body.config.hours).toEqual(hours);
+      // El cierre del día va aparte del horario.
+      expect(res.body.config.dailyCloseTime).toBe('22:15');
+    });
+
+    it('the time zone is changed in the branch data and serves both modules', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const branchUrl = `/v1/branches/restaurant/${seed.restaurantA.id}/${seed.branchA.id}`;
+
+      await http()
+        .patch(branchUrl)
+        .set(auth(owner))
+        .send({ timezone: 'America/Mexico_City' })
+        .expect(200);
+      const changed = await http()
+        .get(configUrl())
+        .set(auth(owner))
+        .expect(200);
+      expect(changed.body.config.timezone).toBe('America/Mexico_City');
+
+      await http()
+        .patch(branchUrl)
+        .set(auth(owner))
+        .send({ timezone: 'Marte/Olympus' })
+        .expect(400);
+      // Una sucursal del dueño no acepta la comisión por esta ruta.
+      await http()
+        .patch(branchUrl)
+        .set(auth(owner))
+        .send({ commissionPct: 0 })
+        .expect(400);
+
+      await http()
+        .patch(branchUrl)
+        .set(auth(owner))
+        .send({ timezone: 'America/Hermosillo' })
+        .expect(200);
     });
 
     it('another client cannot read it', async () => {
@@ -865,6 +946,12 @@ describe('BotBite API (e2e)', () => {
         whatsappPhoneNumberId: '1439262192594415',
         verifyLocation: true,
         dailyCloseTime: '22:15',
+        timezone: 'America/Hermosillo',
+        commissionPct: 0.5,
+        hours: [
+          { days: [1, 2, 3, 4, 5, 6], opens: '13:00', closes: '01:00' },
+          { days: [0], opens: '13:00', closes: '20:00' },
+        ],
       });
       expect(res.body.catalog).toEqual([
         {
@@ -2118,6 +2205,29 @@ describe('BotBite API (e2e)', () => {
           const notice = notices[notices.length - 1];
           expect(notice.type).toBe('payment');
           expect(notice.message).toContain('consumo $50.00 + propina $10.00');
+        });
+
+        it('keeps the commission the bot used for the table link', async () => {
+          const code = await openFor(nextPhone());
+          await askBill(code).expect(200);
+
+          // Solo con payment_link.
+          await askBill(code, { commissionPct: 0.5 }).expect(400);
+
+          await http()
+            .patch(`${ordersUrl}/${code}`)
+            .set(bot())
+            .send({ status: 'payment_link', tip: 0, commissionPct: 0.5 })
+            .expect(200);
+          expect(Number((await orderOf(code)).commissionPct)).toBe(0.5);
+
+          // Un link nuevo con otra comisión la actualiza.
+          const relink = await http()
+            .patch(`${ordersUrl}/${code}`)
+            .set(bot())
+            .send({ status: 'payment_link', commissionPct: 1 })
+            .expect(200);
+          expect(relink.body.order.commissionPct).toBe(1);
         });
 
         it('earns cashback on what was paid, after the discount', async () => {

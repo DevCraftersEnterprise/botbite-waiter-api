@@ -56,7 +56,7 @@ import {
 } from '@/modules/ordering/dto/update-accepting.dto';
 import { OrderingConfigService } from '@/modules/ordering/services/ordering-config.service';
 import { Order } from '@/modules/orders/entities/order.entity';
-import { OrderSource } from '@/modules/orders/enums/order.enums';
+import { OrderSource, OrderStatus } from '@/modules/orders/enums/order.enums';
 import {
   OrderAccountsService,
   RoundResult,
@@ -177,7 +177,7 @@ export class BotController {
   @ApiOperation({
     summary: 'Avanza el estado de la cuenta o de la entrega',
     description:
-      'Con `status`: avisa a caja al pedir la cuenta y al elegir pagar con el mesero. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina: toma de la respuesta los importes del link. En recoger y domicilio, `open` → `payment_link` aplica el monedero, y `cancelled` cancela un pedido sin pagar y devuelve el saldo usado. Con `fulfillmentStatus`: avanza la entrega de un pedido pagado. Se manda uno de los dos. Un cambio no permitido responde 409.',
+      'Con `status`: avisa a caja al pedir la cuenta y al elegir pagar con el mesero. Con `bill_requested` aplica el monedero y con `payment_link` guarda la propina y la comisión con que se generó el link: toma de la respuesta los importes del link. En recoger y domicilio, `open` → `payment_link` aplica el monedero, y `cancelled` cancela un pedido sin pagar y devuelve el saldo usado. Con `fulfillmentStatus`: avanza la entrega de un pedido pagado. Se manda uno de los dos. Un cambio no permitido responde 409.',
   })
   @ApiOkResponse({ type: BotOrderResponse })
   async updateOrder(
@@ -189,6 +189,13 @@ export class BotController {
 
     if (Boolean(status) === Boolean(fulfillmentStatus)) {
       throw new BadRequestException('Send either status or fulfillmentStatus');
+    }
+
+    if (
+      dto.commissionPct !== undefined &&
+      status !== OrderStatus.PAYMENT_LINK
+    ) {
+      throw new BadRequestException('commissionPct is only for payment_link');
     }
 
     if (fulfillmentStatus) {

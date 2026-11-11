@@ -18,6 +18,7 @@ import {
 } from 'class-validator';
 import { toCoordinate } from '@/common/utils/coordinate.util';
 import { SLUG_PATTERN } from '@/common/utils/slug.util';
+import { OrderingHoursDto } from '@/modules/ordering/dto/update-ordering.dto';
 
 export class BranchFeaturesDto {
   @IsOptional()
@@ -63,6 +64,7 @@ export const ADMIN_ONLY_BOT_FIELDS = [
   'whatsappPhoneNumberId',
   'botBaseUrl',
   'features',
+  'commissionPct',
 ] as const;
 
 export class UpdateBotConfigDto {
@@ -148,9 +150,25 @@ export class UpdateBotConfigDto {
   @Max(20)
   maxRecommendations?: number;
 
+  /** También se cambia en los datos de la sucursal: la usan mesero y pedidos. */
   @IsOptional()
   @IsTimeZone()
   timezone?: string;
+
+  /** Horario del mesero. Vacío: atiende siempre. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(21)
+  @ValidateNested({ each: true })
+  @Type(() => OrderingHoursDto)
+  hours?: OrderingHoursDto[];
+
+  /** Comisión de BotBite en los pagos del mesero. Solo SUPER/ADMIN. */
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(100)
+  commissionPct?: number;
 
   @IsOptional()
   @Matches(/^([01]\d|2[0-3]):[0-5]\d$/, {

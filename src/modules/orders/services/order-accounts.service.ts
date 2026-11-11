@@ -95,6 +95,8 @@ export interface BotOrderUpdate {
   walletUse?: WalletUse;
   walletAmount?: number;
   tip?: number;
+  /** Con `payment_link`: la comisión con que el bot generó el link. */
+  commissionPct?: number;
 }
 
 export interface CancelPaidResult {
@@ -379,8 +381,15 @@ export class OrderAccountsService {
         const locked = await this.lockOrder(manager, { code, branchId });
 
         if (locked.status === status) {
-          if (status === OrderStatus.PAYMENT_LINK && update.tip !== undefined) {
-            locked.tip = update.tip;
+          // Un link nuevo puede cambiar la propina o la comisión.
+          if (
+            status === OrderStatus.PAYMENT_LINK &&
+            (update.tip !== undefined || update.commissionPct !== undefined)
+          ) {
+            if (update.tip !== undefined) locked.tip = update.tip;
+            if (update.commissionPct !== undefined) {
+              locked.commissionPct = update.commissionPct;
+            }
             await manager.save(locked);
           }
           return { order: locked, changed: false, walletCapped: false };
@@ -428,6 +437,9 @@ export class OrderAccountsService {
         if (status === OrderStatus.PAYMENT_LINK) {
           locked.paymentMethod = PaymentMethod.MERCADO_PAGO;
           locked.tip = update.tip ?? 0;
+          if (update.commissionPct !== undefined) {
+            locked.commissionPct = update.commissionPct;
+          }
         }
 
         return {
