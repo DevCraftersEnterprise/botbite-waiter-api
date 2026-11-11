@@ -59,6 +59,9 @@ export class FindOneBranchUseCase {
         surveyUrl: true,
         qrUrl: true,
         slug: true,
+        timezone: true,
+        latitude: true,
+        longitude: true,
         restaurantId: true,
         restaurant: {
           id: true,
