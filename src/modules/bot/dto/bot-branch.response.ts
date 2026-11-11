@@ -264,11 +264,37 @@ export class BotBranchConfig {
   @ApiProperty({ example: 4 })
   maxRecommendations: number;
 
-  @ApiProperty({ example: 'America/Hermosillo' })
+  @ApiProperty({
+    example: 'America/Hermosillo',
+    description:
+      'De la sucursal: la usan el mesero (`hours`, `dailyCloseTime`) y los pedidos (`ordering.hours`)',
+  })
   timezone: string;
 
-  @ApiProperty({ example: '23:30' })
+  @ApiProperty({
+    example: '23:30',
+    description:
+      '"Cierre del día" del mesero. No es su horario: ese va en `hours`',
+  })
   dailyCloseTime: string;
+
+  @ApiProperty({
+    type: [BotOrderingHours],
+    description:
+      'Horario del mesero, en la zona horaria de la sucursal. Vacío: atiende siempre',
+    example: [
+      { days: [1, 2, 3, 4, 5, 6], opens: '13:00', closes: '01:00' },
+      { days: [0], opens: '13:00', closes: '20:00' },
+    ],
+  })
+  hours: BotOrderingHours[];
+
+  @ApiProperty({
+    example: 0.5,
+    description:
+      'Comisión de BotBite en los pagos del mesero (`marketplace_fee`, en %), sobre el `amountDue`. 0: sin comisión',
+  })
+  commissionPct: number;
 
   @ApiProperty({ type: String, nullable: true })
   surveyUrl: string | null;

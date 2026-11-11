@@ -12,6 +12,7 @@ import { BaseEntity } from '@/common/database/base.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { BranchOrdering } from '@/modules/ordering/entities/branch-ordering.entity';
+import type { OrderingHours } from '@/modules/ordering/interfaces/ordering.interfaces';
 
 /** Funciones del mesero que contrata cada sucursal. */
 export interface BranchFeatures {
@@ -43,6 +44,10 @@ export const DEFAULT_BRANCH_FEATURES: BranchFeatures = {
 @Check(
   'CHK_branches_location',
   `NOT "verifyLocation" OR ("latitude" IS NOT NULL AND "longitude" IS NOT NULL)`,
+)
+@Check(
+  'CHK_branches_commission',
+  `"commissionPct" >= 0 AND "commissionPct" <= 100`,
 )
 export class Branch extends BaseEntity {
   @Column()
@@ -107,11 +112,24 @@ export class Branch extends BaseEntity {
   @Column({ type: 'int', default: 4 })
   maxRecommendations: number;
 
+  /** De la sucursal: la usan el mesero, los pedidos y los reportes del portal. */
   @Column({ type: 'varchar', length: 40, default: 'America/Hermosillo' })
   timezone: string;
 
+  /** "Cierre del día" del mesero. No es su horario: ese va en `hours`. */
   @Column({ type: 'time', default: '23:30:00' })
   dailyCloseTime: string;
+
+  /** Horario del mesero, como el de pedidos. Vacío: atiende siempre. */
+  @Column({ type: 'jsonb', default: () => `'[]'` })
+  hours: OrderingHours[];
+
+  /**
+   * Comisión de BotBite en los pagos del mesero (`marketplace_fee`), sobre lo
+   * que paga el cliente. 0: sin comisión. Solo la cambia BotBite.
+   */
+  @Column({ type: 'numeric', precision: 5, scale: 2, default: 0 })
+  commissionPct: number;
 
   @Column({ type: 'jsonb', default: DEFAULT_BRANCH_FEATURES })
   features: BranchFeatures;

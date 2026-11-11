@@ -2,6 +2,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsTimeZone,
   IsUrl,
   Matches,
   MaxLength,
@@ -45,4 +46,9 @@ export class CreateBranchDto {
   @IsUrl({ protocols: ['https', 'http'], require_protocol: true })
   @MaxLength(500)
   surveyUrl?: string | null;
+
+  /** De la sucursal: la usan el mesero y los pedidos. Sin ella, Hermosillo. */
+  @IsOptional()
+  @IsTimeZone()
+  timezone?: string;
 }
