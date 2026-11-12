@@ -146,6 +146,23 @@ describe('BotBite API (e2e)', () => {
     await app?.close();
   });
 
+  describe('health', () => {
+    it('answers without touching the database, so Neon can scale to zero (#46)', async () => {
+      const query = jest.spyOn(dataSource, 'query');
+
+      const res = await http().get('/v1/health').expect(200);
+
+      expect(res.body.status).toBe('ok');
+      expect(query).not.toHaveBeenCalled();
+      query.mockRestore();
+    });
+
+    it('checks the database on its own route', async () => {
+      const res = await http().get('/v1/health/db').expect(200);
+      expect(res.body).toMatchObject({ status: 'ok', database: 'up' });
+    });
+  });
+
   describe('auth', () => {
     it('returns the same error for unknown emails and wrong passwords', async () => {
       const unknown = await http()
