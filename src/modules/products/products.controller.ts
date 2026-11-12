@@ -112,7 +112,8 @@ export class ProductsController {
   }
 
   @Patch('activate/:restaurantId/:productId')
-  @Auth([UserRoles.SUPER, UserRoles.ADMIN])
+  // El dueño también, solo con sus productos: lo revisa changeProductStatusUseCase (#41).
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
   activateProduct(
     @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
     @Param('productId', ParseUUIDPipe) productId: string,
@@ -148,7 +149,8 @@ export class ProductsController {
   }
 
   @Delete(':restaurantId/:productId')
-  @Auth([UserRoles.SUPER, UserRoles.ADMIN])
+  // El dueño también, solo con sus productos: lo revisa changeProductStatusUseCase (#41).
+  @Auth([UserRoles.SUPER, UserRoles.ADMIN, UserRoles.CLIENT])
   deactivateProduct(
     @Param('restaurantId', ParseUUIDPipe) restaurantId: string,
     @Param('productId', ParseUUIDPipe) productId: string,
