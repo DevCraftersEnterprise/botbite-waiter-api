@@ -1,4 +1,4 @@
-import { Column, Entity, Index, JoinColumn, OneToOne } from 'typeorm';
+import { Check, Column, Entity, Index, JoinColumn, OneToOne } from 'typeorm';
 import { BaseEntity } from '@/common/database/base.entity';
 import { Branch } from '@/modules/branches/entities/branch.entity';
 import { DEFAULT_SCHEDULING } from '@/modules/ordering/interfaces/ordering.interfaces';
@@ -15,13 +15,24 @@ import { OrderType } from '@/modules/orders/enums/order.enums';
  * propio número de WhatsApp y su propio horario.
  */
 @Entity('branch_ordering')
+@Check(
+  'CHK_branch_ordering_commission',
+  `"commissionPct" >= 0 AND "commissionPct" <= 100`,
+)
 export class BranchOrdering extends BaseEntity {
-  @Index('UQ_branch_ordering_branch', { unique: true })
+  /**
+   * Una por sucursal: el `@OneToOne` crea la constraint única. TypeORM no deja
+   * darle nombre, así que lleva el de su estrategia (UQ_211ac65b…, ver la
+   * migración AlignEntitiesWithSchema).
+   */
   @Column({ type: 'uuid' })
   branchId: string;
 
   @OneToOne(() => Branch, (branch) => branch.ordering, { onDelete: 'CASCADE' })
-  @JoinColumn({ name: 'branchId' })
+  @JoinColumn({
+    name: 'branchId',
+    foreignKeyConstraintName: 'FK_branch_ordering_branch',
+  })
   branch: Branch;
 
   /** Lo contrató la sucursal. Solo lo cambia BotBite. */
