@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AccessControlService } from '@/core/access/access-control.service';
 import { BranchStaff } from '@/modules/branches/entities/branch-staff.entity';
+import { OrdersGateway } from '@/modules/notifications/gateways/orders.gateway';
 import { User } from '@/modules/users/entities/user.entity';
 
 export interface StaffMember {
@@ -31,6 +32,7 @@ export class BranchStaffService {
     private readonly staffRepository: Repository<BranchStaff>,
     @InjectRepository(User)
     private readonly userRepository: Repository<User>,
+    private readonly ordersGateway: OrdersGateway,
   ) {}
 
   async findByBranch(branchId: string): Promise<{ staff: StaffMember[] }> {
@@ -101,6 +103,9 @@ export class BranchStaffService {
     if (!result.affected) {
       throw new NotFoundException('That user is not assigned to this branch');
     }
+
+    // Deja de recibir los avisos en vivo de esa sucursal de inmediato (#37).
+    await this.ordersGateway.removeFromBranch(userId, branchId);
 
     this.logger.log(`User ${userId} removed from branch ${branchId}`);
   }

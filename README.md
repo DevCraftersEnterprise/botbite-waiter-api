@@ -43,6 +43,7 @@ La API queda en `http://localhost:3000/v1` y el health check en `GET /v1/health`
 | `build` / `start:prod` | Compilar y ejecutar `dist/main` |
 | `migration:run` / `migration:revert` | Migraciones desde `src` (ts-node) |
 | `migration:generate -- src/database/migrations/Nombre` | Generar una migración a partir de las entidades |
+| `migration:check` | Falla si las entidades no coinciden con la base migrada (lo corre la CI) |
 | `migration:run:prod` | Migraciones desde `dist` (requiere `build`) |
 | `test` | Pruebas unitarias |
 | `test:e2e` | Pruebas e2e contra Postgres. La base `E2E_DB_NAME` (por defecto `botbite_test`) **se borra** en cada corrida |
@@ -123,6 +124,13 @@ src/
 La conversación con el comensal corre en el **servicio del mesero** ([cosunab/botbite-mesero](https://github.com/cosunab/botbite-mesero)), fuera de este repo, con n8n para tareas secundarias: QR con verificación de ubicación, pedidos, cuenta, pagos y facturas. La API no recibe mensajes de WhatsApp ni los envía.
 
 La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el panel lo muestra en vivo por Socket.IO, en el namespace `/orders`.
+
+**Sesión del socket** (`OrdersGateway`):
+- El access token va en `auth.token` del handshake o en la cabecera `Authorization`. Ya no se acepta por query, porque quedaría en los logs.
+- `joinBranch` revisa el acceso a la sucursal.
+- La conexión se cierra cuando vence el token: el panel la renueva y vuelve a conectar.
+- Al desactivar a un usuario se cierran sus conexiones.
+- Al quitar a alguien del personal de una sucursal, sale de su sala.
 
 **API del bot:** el mesero llama a `/v1/bot/*` con el header `X-BotBite-Key`. El límite es por llave (`THROTTLE_BOT_LIMIT`, 1000 por minuto), no por IP, porque el servicio del mesero atiende a todos los negocios desde la misma IP.
 - Cada llave pertenece a una sucursal, y la sucursal siempre sale de la llave. Solo se guarda su hash y se muestra una sola vez.

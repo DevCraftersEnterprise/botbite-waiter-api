@@ -1,3 +1,4 @@
+import { NotificationsModule } from '@/modules/notifications/notifications.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CommonModule } from '@/common/common.module';
@@ -31,6 +32,7 @@ import { User } from '@/modules/users/entities/user.entity';
   imports: [
     TypeOrmModule.forFeature([Branch, BranchStaff, User]),
     CommonModule,
+    NotificationsModule,
   ],
   exports: [TypeOrmModule, BranchesService, FindOneBranchUseCase],
 })

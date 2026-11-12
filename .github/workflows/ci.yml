@@ -69,3 +69,16 @@ jobs:
           E2E_DB_PASSWORD: postgres
           E2E_DB_NAME: botbite_test
         run: npm run test:e2e
+
+      - name: Schema drift
+        # Las entidades deben describir lo que crean las migraciones. Si
+        # migration:generate propone algo, falta una migración o la entidad
+        # está mal (issue #39). Usa la base que dejaron migrada las e2e.
+        env:
+          DB_HOST: localhost
+          DB_PORT: 5432
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: botbite_test
+          DB_SSL: 'false'
+        run: npm run migration:check
