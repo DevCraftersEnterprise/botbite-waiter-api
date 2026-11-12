@@ -5,6 +5,7 @@ import { PaginationDto } from '@/common/dto/pagination.dto';
 import { TranslationService } from '@/common/services/translation.service';
 import { UserRoles } from '@/core/auth/enums/user-roles.enum';
 import { TokenService } from '@/modules/auth/services/token.service';
+import { OrdersGateway } from '@/modules/notifications/gateways/orders.gateway';
 import { FindUsersDto } from '@/modules/users/dto/find-users.dto';
 import { RegisterUserDto } from '@/modules/users/dto/register-user.dto';
 import { User } from '@/modules/users/entities/user.entity';
@@ -24,6 +25,7 @@ export class UsersService {
     private readonly userRepository: Repository<User>,
     private readonly translationService: TranslationService,
     private readonly tokenService: TokenService,
+    private readonly ordersGateway: OrdersGateway,
   ) {}
 
   registerUser(registerUserDto: RegisterUserDto, lang: string) {
@@ -86,13 +88,13 @@ export class UsersService {
     });
   }
 
-  private changeStatus(
+  private async changeStatus(
     actor: UserActor,
     userId: string,
     lang: string,
     status: boolean,
   ) {
-    return changeUserStatusUseCase({
+    const result = await changeUserStatusUseCase({
       actor,
       userId,
       lang,
@@ -101,6 +103,11 @@ export class UsersService {
       repository: this.userRepository,
       translationService: this.translationService,
     });
+
+    // Un usuario desactivado deja de recibir avisos en vivo de inmediato (#37).
+    if (!status) this.ordersGateway.disconnectUser(userId);
+
+    return result;
   }
 
   private manageAdminRole(

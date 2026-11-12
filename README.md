@@ -124,6 +124,13 @@ La conversación con el comensal corre en el **servicio del mesero** ([cosunab/b
 
 La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el panel lo muestra en vivo por Socket.IO, en el namespace `/orders`.
 
+**Sesión del socket** (`OrdersGateway`):
+- El access token va en `auth.token` del handshake o en la cabecera `Authorization`. Ya no se acepta por query, porque quedaría en los logs.
+- `joinBranch` revisa el acceso a la sucursal.
+- La conexión se cierra cuando vence el token: el panel la renueva y vuelve a conectar.
+- Al desactivar a un usuario se cierran sus conexiones.
+- Al quitar a alguien del personal de una sucursal, sale de su sala.
+
 **API del bot:** el mesero llama a `/v1/bot/*` con el header `X-BotBite-Key`. El límite es por llave (`THROTTLE_BOT_LIMIT`, 1000 por minuto), no por IP, porque el servicio del mesero atiende a todos los negocios desde la misma IP.
 - Cada llave pertenece a una sucursal, y la sucursal siempre sale de la llave. Solo se guarda su hash y se muestra una sola vez.
 - `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si el mesero envía `If-None-Match`, contesta `304` cuando nada cambió. Del restaurante trae también `logoUrl` y `privacyUrl` (null si no hay), y en `features` va `languages`: apagado, el bot atiende solo en español.
