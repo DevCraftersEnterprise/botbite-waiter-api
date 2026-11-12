@@ -1661,6 +1661,87 @@ describe('BotBite API (e2e)', () => {
         .expect(409);
     });
 
+    describe('unavailable menu items (#38)', () => {
+      const switches = () => ({
+        item: () => dataSource.getRepository(MenuItem),
+        product: () => dataSource.getRepository(Product),
+        category: () => dataSource.getRepository(Category),
+        menu: () => dataSource.getRepository(Menu),
+      });
+      const ids = () => ({
+        item: seed.menuItem.id,
+        product: seed.menuItem.productId,
+        category: seed.category.id,
+        menu: seed.menu.id,
+      });
+
+      for (const what of ['item', 'product', 'category', 'menu'] as const) {
+        it(`rejects a round with a ${what} turned off and creates nothing`, async () => {
+          const code = nextCode();
+          await openAccount(code).expect(201);
+          const before = await dataSource
+            .getRepository(Order)
+            .findOneOrFail({ where: { code }, relations: { rounds: true } });
+
+          const repo = switches()[what]();
+          await repo.update(ids()[what], { isActive: false });
+          try {
+            const res = await http()
+              .post(`${ordersUrl}/${code}/rounds`)
+              .set(bot())
+              .send({ number: 2, items: [item()] })
+              .expect(409);
+            expect(res.body.unavailable).toEqual([seed.menuItem.id]);
+          } finally {
+            await repo.update(ids()[what], { isActive: true });
+          }
+
+          const after = await dataSource
+            .getRepository(Order)
+            .findOneOrFail({ where: { code }, relations: { rounds: true } });
+          expect(after.rounds).toHaveLength(before.rounds.length);
+          expect(Number(after.total)).toBe(Number(before.total));
+        });
+      }
+
+      it('does not open an account whose first round is unavailable', async () => {
+        const code = nextCode();
+        await dataSource
+          .getRepository(MenuItem)
+          .update(seed.menuItem.id, { isActive: false });
+        try {
+          await openAccount(code).expect(409);
+        } finally {
+          await dataSource
+            .getRepository(MenuItem)
+            .update(seed.menuItem.id, { isActive: true });
+        }
+        expect(await dataSource.getRepository(Order).countBy({ code })).toBe(0);
+      });
+
+      it('staff tabs reject it too', async () => {
+        await dataSource
+          .getRepository(MenuItem)
+          .update(seed.menuItem.id, { isActive: false });
+        try {
+          const res = await http()
+            .post('/v1/orders/tabs')
+            .set(auth(ownerToken))
+            .send({
+              branchId: seed.branchA.id,
+              table: 'BARRA',
+              items: [item(1)],
+            })
+            .expect(409);
+          expect(res.body.unavailable).toEqual([seed.menuItem.id]);
+        } finally {
+          await dataSource
+            .getRepository(MenuItem)
+            .update(seed.menuItem.id, { isActive: true });
+        }
+      });
+    });
+
     it('staff open their own accounts, without a customer', async () => {
       const res = await http()
         .post('/v1/orders/tabs')
