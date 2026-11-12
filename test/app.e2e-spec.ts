@@ -225,6 +225,20 @@ describe('BotBite API (e2e)', () => {
   });
 
   describe('multi-tenant access', () => {
+    it('an owner activates and deactivates only its own products (#41)', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const other = await tokenFor(seed.clientB.email);
+      const { productId } = seed.menuItem;
+      const deactivate = `/v1/products/${seed.restaurantA.id}/${productId}`;
+      const activate = `/v1/products/activate/${seed.restaurantA.id}/${productId}`;
+
+      // Otro dueño no puede: el producto no es de su restaurante.
+      await http().delete(deactivate).set(auth(other)).expect(400);
+
+      await http().delete(deactivate).set(auth(owner)).expect(200);
+      await http().patch(activate).set(auth(owner)).expect(200);
+    });
+
     it('a client can see its own branches but not another restaurant', async () => {
       const { access_token } = await login(seed.clientB.email);
 
