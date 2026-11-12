@@ -26,6 +26,9 @@ export default () => {
       qrBaseUrl: process.env.QR_BASE_URL || 'https://botbite.com.mx',
     },
     database: {
+      // Opcional: si existe, se usa en lugar de DB_HOST, DB_PORT, DB_USERNAME,
+      // DB_PASSWORD y DB_NAME. Si trae sslmode, eso manda sobre DB_SSL.
+      url: process.env.DATABASE_URL || undefined,
       host: process.env.DB_HOST,
       port: parseInt(process.env.DB_PORT ?? '5432', 10),
       username: process.env.DB_USERNAME,
@@ -40,8 +43,10 @@ export default () => {
     },
     jwt: {
       secret: process.env.JWT_SECRET,
+      // 1 hora: un panel abierto renueva la sesión (y despierta la base) una vez
+      // por hora, no cada 15 minutos (Carlos, 12 nov 2026).
       accessExpiry:
-        process.env.JWT_ACCESS_EXPIRY || process.env.JWT_EXPIRES_IN || '15m',
+        process.env.JWT_ACCESS_EXPIRY || process.env.JWT_EXPIRES_IN || '1h',
       refreshSecret: process.env.JWT_REFRESH_SECRET,
       refreshExpiry: process.env.JWT_REFRESH_EXPIRY || '7d',
     },

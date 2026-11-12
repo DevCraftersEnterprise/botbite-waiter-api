@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { errorCode } from '@/common/utils/error.util';
@@ -18,8 +19,13 @@ export interface NewNotification {
   eventId?: string | null;
 }
 
+/** Los avisos leídos se borran después de estos días. Los pedidos y los pagos se quedan. */
+export const READ_NOTIFICATIONS_RETENTION_DAYS = 90;
+
 @Injectable()
 export class NotificationsService {
+  private readonly logger = new Logger(NotificationsService.name);
+
   constructor(
     @InjectRepository(CashierNotification)
     private readonly cashierNotificationRepository: Repository<CashierNotification>,
@@ -113,6 +119,35 @@ export class NotificationsService {
 
     if (notification.branchId) {
       this.ordersGateway.emitNotificationUpdate(notification.branchId, updated);
+    }
+  }
+
+  /**
+   * Borra los avisos leídos de más de 90 días (Carlos, 12 nov 2026). Corre a
+   * las 4:00, junto con las otras limpiezas, para no despertar la base otra
+   * vez. Los que siguen sin leer se quedan, por viejos que sean.
+   */
+  @Cron(CronExpression.EVERY_DAY_AT_4AM)
+  async deleteOldReadNotifications(): Promise<number> {
+    try {
+      const result = await this.cashierNotificationRepository
+        .createQueryBuilder()
+        .delete()
+        .from(CashierNotification)
+        .where('"isActive" = false')
+        .andWhere(
+          `COALESCE("readAt", "updatedAt") < now() - make_interval(days => :days)`,
+          { days: READ_NOTIFICATIONS_RETENTION_DAYS },
+        )
+        .execute();
+      const deleted = result.affected ?? 0;
+      this.logger.log(
+        `Deleted ${deleted} read notifications older than ${READ_NOTIFICATIONS_RETENTION_DAYS} days`,
+      );
+      return deleted;
+    } catch (error) {
+      this.logger.error('Failed to delete old read notifications', error);
+      return 0;
     }
   }
 }

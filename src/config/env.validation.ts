@@ -9,9 +9,13 @@ import {
   IsUrl,
   Matches,
   MinLength,
+  ValidateIf,
 } from 'class-validator';
 
 const DURATION = /^\d+[smhd]?$/;
+
+const withoutDatabaseUrl = (env: { DATABASE_URL?: string }): boolean =>
+  !env.DATABASE_URL;
 
 export class EnvironmentVariables {
   @IsNumber()
@@ -56,25 +60,36 @@ export class EnvironmentVariables {
   @MinLength(12)
   DOCS_PASSWORD?: string;
 
-  // Base de datos
+  // Base de datos: DATABASE_URL o las cinco DB_* sueltas.
+  @IsOptional()
+  @Matches(/^postgres(ql)?:\/\/\S+$/, {
+    message: 'DATABASE_URL must start with postgres:// or postgresql://',
+  })
+  DATABASE_URL?: string;
+
+  @ValidateIf(withoutDatabaseUrl)
   @IsString()
   @IsNotEmpty()
-  DB_HOST: string;
+  DB_HOST?: string;
 
+  @ValidateIf(withoutDatabaseUrl)
   @IsNumber()
   @Type(() => Number)
-  DB_PORT: number;
+  DB_PORT?: number;
 
+  @ValidateIf(withoutDatabaseUrl)
   @IsString()
   @IsNotEmpty()
-  DB_USERNAME: string;
+  DB_USERNAME?: string;
 
+  @ValidateIf(withoutDatabaseUrl)
   @IsString()
-  DB_PASSWORD: string;
+  DB_PASSWORD?: string;
 
+  @ValidateIf(withoutDatabaseUrl)
   @IsString()
   @IsNotEmpty()
-  DB_NAME: string;
+  DB_NAME?: string;
 
   @IsOptional()
   @IsBooleanString()

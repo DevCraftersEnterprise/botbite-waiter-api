@@ -6,6 +6,8 @@ import { DataSourceOptions } from 'typeorm';
 export const SOURCE_EXTENSION = extname(__filename);
 
 export interface DatabaseSettings {
+  /** DATABASE_URL: si existe, se usa en lugar de host, puerto, usuario, contraseña y base. */
+  url?: string;
   host?: string;
   port: number;
   username?: string;
@@ -34,11 +36,17 @@ export const buildDataSourceOptions = (
   settings: DatabaseSettings,
 ): DataSourceOptions => ({
   type: 'postgres',
-  host: settings.host,
-  port: settings.port,
-  username: settings.username,
-  password: settings.password,
-  database: settings.name,
+  // Con DATABASE_URL no se pasan los datos sueltos: una sola fuente. Si la URL
+  // trae sslmode, pg lo aplica por encima de la opción ssl de abajo.
+  ...(settings.url
+    ? { url: settings.url }
+    : {
+        host: settings.host,
+        port: settings.port,
+        username: settings.username,
+        password: settings.password,
+        database: settings.name,
+      }),
   ssl: settings.ssl
     ? {
         rejectUnauthorized: settings.sslRejectUnauthorized,
