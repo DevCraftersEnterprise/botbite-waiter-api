@@ -63,10 +63,11 @@ Se validan al arrancar ([src/config/env.validation.ts](src/config/env.validation
 | `DOCS_USER`, `DOCS_PASSWORD` | No | Acceso a Swagger en `/docs`. En producción no se publica sin ellas |
 | `BOT_WEBHOOK_SECRET` | No | Firma de los avisos al servicio del mesero (mínimo 32 caracteres). Sin él no se envían |
 | `CUSTOMERS_EXPORT_ENABLED` | No (apagado en producción) | `true` permite exportar clientes a CSV. Se enciende cuando el aviso de privacidad de BotBite cubra la exportación |
-| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Sí | Conexión a PostgreSQL |
+| `DATABASE_URL` | No | Conexión a PostgreSQL en una sola cadena (`postgresql://usuario:contraseña@host/base`). Si existe, se usa en lugar de las `DB_*` sueltas; si trae `sslmode`, eso manda sobre `DB_SSL` |
+| `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, `DB_NAME` | Sí, si no hay `DATABASE_URL` | Conexión a PostgreSQL |
 | `DB_SSL`, `DB_SSL_REJECT_UNAUTHORIZED`, `DB_SSL_CA` | No | SSL activo en producción y con verificación del certificado |
 | `JWT_SECRET`, `JWT_REFRESH_SECRET` | Sí | Mínimo 32 caracteres cada uno y distintos entre sí |
-| `JWT_ACCESS_EXPIRY`, `JWT_REFRESH_EXPIRY` | No (`15m`, `7d`) | Formato `15m`, `1h`, `7d` |
+| `JWT_ACCESS_EXPIRY`, `JWT_REFRESH_EXPIRY` | No (`1h`, `7d`) | Formato `15m`, `1h`, `7d`. El access token dura 1 hora: un panel abierto renueva su sesión (y despierta la base) una vez por hora |
 | `CLOUDINARY_*` | Sí | Imágenes de productos, QR y PDF de menús |
 | `THROTTLE_*` | No | Límites de peticiones de la API |
 
@@ -90,6 +91,7 @@ La API corre como **Web Service en Render** y la base de datos está en **Neon**
 ### Neon
 - Usa el host **con pooling** (`ep-xxxx-pooler.<región>.aws.neon.tech`): Neon pone PgBouncer delante y la API puede abrir más conexiones sin agotar las de la base.
 - `DB_SSL=true` con `DB_SSL_REJECT_UNAUTHORIZED=true`. El certificado de Neon es público y válido, así que no hace falta `DB_SSL_CA`.
+- También sirve la cadena que da Neon en `DATABASE_URL`, en lugar de las `DB_*`. Trae `sslmode=require`, que `pg` aplica con verificación completa del certificado (y avisa en el log que en su próxima versión mayor cambiará; con `sslmode=verify-full` no avisa).
 - Si el proyecto tiene *scale to zero*, la primera consulta tras un rato sin uso tarda unos cientos de milisegundos más. En horario de servicio conviene desactivarlo o subir el tiempo de suspensión.
 - Usa una **rama de Neon** para desarrollo y pruebas, nunca la de producción. Las pruebas e2e borran la base.
 
@@ -124,6 +126,8 @@ src/
 La conversación con el comensal corre en el **servicio del mesero** ([cosunab/botbite-mesero](https://github.com/cosunab/botbite-mesero)), fuera de este repo, con n8n para tareas secundarias: QR con verificación de ubicación, pedidos, cuenta, pagos y facturas. La API no recibe mensajes de WhatsApp ni los envía.
 
 La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el panel lo muestra en vivo por Socket.IO, en el namespace `/orders`.
+
+**Retención de notificaciones:** cada día a las 4:00, `NotificationsService.deleteOldReadNotifications` borra las notificaciones de caja leídas hace más de 90 días. Las que siguen sin leer se quedan, y los pedidos, los pagos y la auditoría no se tocan.
 
 **Sesión del socket** (`OrdersGateway`):
 - El access token va en `auth.token` del handshake o en la cabecera `Authorization`. Ya no se acepta por query, porque quedaría en los logs.

@@ -33,6 +33,7 @@ import { MenuItem } from '@/modules/menus/entities/menu-item.entity';
 import { Menu } from '@/modules/menus/entities/menu.entity';
 import { CashierNotification } from '@/modules/notifications/entities/cashier-notifications.entity';
 import { NotificationType } from '@/modules/notifications/enums/notification-type.enum';
+import { NotificationsService } from '@/modules/notifications/notifications.service';
 import { Invoice } from '@/modules/orders/entities/invoice.entity';
 import { OrderItem } from '@/modules/orders/entities/order-item.entity';
 import { OrderRound } from '@/modules/orders/entities/order-round.entity';
@@ -1258,6 +1259,61 @@ describe('BotBite API (e2e)', () => {
            AND (table_name, column_name) IN (('branches', 'availableMessages'), ('branches', 'qrToken'), ('orders', 'interactions'))`,
       );
       expect(columns).toEqual([]);
+    });
+
+    it('deletes read notifications after 90 days and keeps the rest', async () => {
+      const repo = dataSource.getRepository(CashierNotification);
+      const daysAgo = (days: number) =>
+        new Date(Date.now() - days * 24 * 60 * 60_000);
+      const make = (message: string, isActive: boolean, readAt: Date | null) =>
+        repo.save(
+          repo.create({
+            branchId: seed.branchA.id,
+            type: NotificationType.ALERT,
+            message,
+            isActive,
+            readAt,
+          }),
+        );
+
+      const oldRead = await make(
+        'retención: leído hace 91 días',
+        false,
+        daysAgo(91),
+      );
+      const recentRead = await make(
+        'retención: leído hace 10 días',
+        false,
+        daysAgo(10),
+      );
+      const oldUnread = await make(
+        'retención: sin leer de hace 200 días',
+        true,
+        null,
+      );
+      const legacyRead = await make('retención: leído sin fecha', false, null);
+      await dataSource.query(
+        `UPDATE cashier_notifications SET "createdAt" = $2, "updatedAt" = $2 WHERE id = ANY($1)`,
+        [[oldUnread.id, legacyRead.id], daysAgo(200)],
+      );
+
+      const deleted = await app
+        .get(NotificationsService)
+        .deleteOldReadNotifications();
+      expect(deleted).toBe(2);
+
+      const remaining = await repo.find({
+        where: { message: Like('retención:%') },
+        withDeleted: true,
+      });
+      expect(remaining.map((n) => n.id).sort()).toEqual(
+        [recentRead.id, oldUnread.id].sort(),
+      );
+      expect(await repo.existsBy({ id: oldRead.id })).toBe(false);
+      expect(await repo.existsBy({ id: legacyRead.id })).toBe(false);
+      expect(await repo.existsBy({ id: seed.notification.id })).toBe(true);
+
+      await repo.delete([recentRead.id, oldUnread.id]);
     });
   });
 
