@@ -1,3 +1,4 @@
+import { JwtService } from '@nestjs/jwt';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { Test } from '@nestjs/testing';
 import * as argon2 from 'argon2';
@@ -3041,6 +3042,142 @@ describe('BotBite API (e2e)', () => {
 
     it('rejects connections without a token', async () => {
       await expect(connect()).rejects.toThrow('Unauthorized');
+    });
+
+    /** Un evento llega al socket en menos de `ms`, o no. */
+    const receives = (socket: Socket, event: string, ms = 1500) =>
+      new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => {
+          socket.off(event, onEvent);
+          resolve(false);
+        }, ms);
+        const onEvent = () => {
+          clearTimeout(timer);
+          resolve(true);
+        };
+        socket.once(event, onEvent);
+      });
+
+    const disconnects = (socket: Socket, ms = 3000) =>
+      new Promise<string | null>((resolve) => {
+        if (socket.disconnected) return resolve('already');
+        const timer = setTimeout(() => resolve(null), ms);
+        socket.once('disconnect', (reason) => {
+          clearTimeout(timer);
+          resolve(reason);
+        });
+      });
+
+    /** Cambia el aviso de la semilla para que la sala reciba un evento. */
+    let notificationRead = false;
+    const touchNotification = async (token: string) => {
+      notificationRead = !notificationRead;
+      await http()
+        .patch(
+          `/v1/notifications/${seed.notification.id}/${notificationRead ? 'read' : 'unread'}`,
+        )
+        .set(auth(token))
+        .expect(200);
+    };
+
+    /** Un cajero nuevo, asignado a la sucursal A. */
+    const newStaffInBranchA = async (email: string) => {
+      const admin = await tokenFor(seed.superUser.email);
+      const created = await http()
+        .post('/v1/users/register-user')
+        .set(auth(admin))
+        .send({ email, password: PASSWORD })
+        .expect(201);
+      await http()
+        .post(`/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/staff`)
+        .set(auth(await tokenFor(seed.clientA.email)))
+        .send({ email })
+        .expect(201);
+      return {
+        id: created.body.user.id as string,
+        // Sin login: el login está limitado a 20 por minuto por IP.
+        token: app
+          .get(JwtService)
+          .sign(
+            { userId: created.body.user.id as string, type: 'access' },
+            { expiresIn: '15m' },
+          ),
+      };
+    };
+
+    it('closes the connection when the access token expires (#37)', async () => {
+      const token = app
+        .get(JwtService)
+        .sign({ userId: seed.clientA.id, type: 'access' }, { expiresIn: '2s' });
+      const socket = await connect(token);
+
+      expect(await disconnects(socket, 4000)).toBe('io server disconnect');
+      socket.close();
+    });
+
+    it('a staff member removed from the branch stops receiving its events (#37)', async () => {
+      const staff = await newStaffInBranchA('socket-removido@botbite.test');
+      const owner = await tokenFor(seed.clientA.email);
+      const socket = await connect(staff.token);
+      await socket.emitWithAck('joinBranch', seed.branchA.id);
+
+      const before = receives(socket, 'notificationUpdate');
+      await touchNotification(owner);
+      expect(await before).toBe(true);
+
+      await http()
+        .delete(
+          `/v1/branches/${seed.restaurantA.id}/${seed.branchA.id}/staff/${staff.id}`,
+        )
+        .set(auth(owner))
+        .expect(204);
+
+      const after = receives(socket, 'notificationUpdate');
+      await touchNotification(owner);
+      expect(await after).toBe(false);
+
+      // Tampoco puede volver a entrar a la sala.
+      const rejoin = (await socket.emitWithAck(
+        'joinBranch',
+        seed.branchA.id,
+      )) as {
+        success: boolean;
+      };
+      expect(rejoin.success).toBe(false);
+      socket.close();
+    });
+
+    it('a deactivated user is disconnected right away (#37)', async () => {
+      const staff = await newStaffInBranchA('socket-desactivado@botbite.test');
+      const socket = await connect(staff.token);
+      await socket.emitWithAck('joinBranch', seed.branchA.id);
+
+      const closed = disconnects(socket);
+      await http()
+        .delete(`/v1/users/deactivate-user/${staff.id}`)
+        .set(auth(await tokenFor(seed.superUser.email)))
+        .expect(200);
+
+      expect(await closed).toBe('io server disconnect');
+      // Y ya no puede volver a conectar con su token.
+      await expect(connect(staff.token)).rejects.toThrow('Unauthorized');
+    });
+
+    it('no longer accepts the token in the query string (#37)', async () => {
+      const token = await tokenFor(seed.clientA.email);
+      const attempt = new Promise<Socket>((resolve, reject) => {
+        const socket = io(`${baseUrl}/orders`, {
+          transports: ['websocket'],
+          query: { token },
+          reconnection: false,
+        });
+        socket.on('connect', () => resolve(socket));
+        socket.on('connect_error', (error) => {
+          socket.close();
+          reject(error);
+        });
+      });
+      await expect(attempt).rejects.toThrow('Unauthorized');
     });
 
     it('only lets users join branches they own', async () => {
