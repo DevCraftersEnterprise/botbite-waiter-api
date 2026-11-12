@@ -13,6 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import {
+  ApiConflictResponse,
   ApiCreatedResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
@@ -129,6 +130,10 @@ export class BotController {
     description:
       'Reenviar el mismo `code` no duplica nada: responde 200 con `created: false`. La API calcula precios y totales con el menú vigente.',
   })
+  @ApiConflictResponse({
+    description:
+      'Algún platillo no está disponible: el platillo, su producto, su categoría o su menú están apagados. `unavailable` trae sus ids. No se crea nada.',
+  })
   @ApiCreatedResponse({ type: BotRoundResponse })
   @ApiOkResponse({ type: BotRoundResponse, description: 'Era un reintento' })
   async openOrder(
@@ -152,6 +157,10 @@ export class BotController {
     summary: 'Agrega una ronda (comanda) a la cuenta',
     description:
       'Reenviar el mismo `number` no duplica la comanda: responde 200 con `created: false`. Solo se aceptan rondas con la cuenta en `open`.',
+  })
+  @ApiConflictResponse({
+    description:
+      'Algún platillo no está disponible: el platillo, su producto, su categoría o su menú están apagados. `unavailable` trae sus ids. No se crea nada.',
   })
   @ApiCreatedResponse({ type: BotRoundResponse })
   @ApiOkResponse({ type: BotRoundResponse, description: 'Era un reintento' })
