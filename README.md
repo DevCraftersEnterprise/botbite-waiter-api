@@ -33,7 +33,7 @@ npm run migration:run
 npm run start:dev
 ```
 
-La API queda en `http://localhost:3000/v1` y el health check en `GET /v1/health`.
+La API queda en `http://localhost:3000/v1`. El health check es `GET /v1/health`, que no toca la base, y `GET /v1/health/db` revisa también la base.
 
 ## Scripts
 
@@ -83,7 +83,7 @@ La API corre como **Web Service en Render** y la base de datos está en **Neon**
 | Build Command | `npm ci --include=dev && npm run build` |
 | Pre-Deploy Command | `npm run migration:run:prod` |
 | Start Command | `npm run start:prod` |
-| Health Check Path | `/v1/health` |
+| Health Check Path | `/v1/health` (no toca la base: Render lo consulta cada pocos segundos y Neon no podría apagarse; nunca pongas `/v1/health/db`) |
 
 > Sin `npm run build` en el Build Command no existe `dist/main` y el despliegue falla con `Cannot find module '.../dist/main'`.
 
@@ -96,7 +96,7 @@ La API corre como **Web Service en Render** y la base de datos está en **Neon**
 ### Orden al desplegar cambios con migraciones
 1. Respaldo o *branch* de la base en Neon (es instantáneo).
 2. Merge a `main`: Render compila, corre las migraciones (pre-deploy) y despliega.
-3. Revisa que `GET /v1/health` responda `{"status":"ok"}`.
+3. Revisa que `GET /v1/health` responda `{"status":"ok"}`, y `GET /v1/health/db` con `"database":"up"`.
 
 Las ramas `v1` (versión anterior) y `main` (v2) se conservan en el repositorio.
 
