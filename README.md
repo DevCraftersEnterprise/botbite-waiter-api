@@ -43,6 +43,7 @@ La API queda en `http://localhost:3000/v1` y el health check en `GET /v1/health`
 | `build` / `start:prod` | Compilar y ejecutar `dist/main` |
 | `migration:run` / `migration:revert` | Migraciones desde `src` (ts-node) |
 | `migration:generate -- src/database/migrations/Nombre` | Generar una migración a partir de las entidades |
+| `migration:check` | Falla si las entidades no coinciden con la base migrada (lo corre la CI) |
 | `migration:run:prod` | Migraciones desde `dist` (requiere `build`) |
 | `test` | Pruebas unitarias |
 | `test:e2e` | Pruebas e2e contra Postgres. La base `E2E_DB_NAME` (por defecto `botbite_test`) **se borra** en cada corrida |

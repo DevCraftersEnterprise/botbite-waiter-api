@@ -108,10 +108,11 @@ export class Order extends BaseEntity {
   @JoinColumn({ name: 'branchId' })
   branch: Branch;
 
+  // Sin `enumName`: el tipo se llama `orders_type_enum`, que es el nombre por
+  // defecto, y si se escribe, migration:generate lo recrea en cada corrida.
   @Column({
     type: 'enum',
     enum: OrderType,
-    enumName: 'orders_type_enum',
     default: OrderType.DINE_IN,
   })
   type: OrderType;

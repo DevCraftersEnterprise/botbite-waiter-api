@@ -3,8 +3,12 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
+import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
+import { User } from '@/modules/users/entities/user.entity';
 
 /** Qué se hizo con datos personales de los clientes. */
 export enum AuditAction {
@@ -31,8 +35,23 @@ export class AuditLog {
   @Column({ type: 'uuid', nullable: true })
   userId: string | null;
 
+  /** Si se borra el usuario, el registro se queda sin autor. */
+  @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })
+  @JoinColumn({
+    name: 'userId',
+    foreignKeyConstraintName: 'FK_audit_logs_user',
+  })
+  user?: User | null;
+
   @Column({ type: 'uuid' })
   restaurantId: string;
+
+  @ManyToOne(() => Restaurant, { onDelete: 'CASCADE' })
+  @JoinColumn({
+    name: 'restaurantId',
+    foreignKeyConstraintName: 'FK_audit_logs_restaurant',
+  })
+  restaurant?: Restaurant;
 
   @Column({ type: 'varchar', length: 50 })
   action: AuditAction;

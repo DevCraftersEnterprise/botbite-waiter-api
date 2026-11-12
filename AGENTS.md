@@ -87,7 +87,12 @@ npm run test:e2e                   # pruebas e2e (ver abajo)
 npm run build
 npm run migration:generate -- src/database/migrations/NombreDelCambio
 npm run migration:run              # usa la base del .env: revisa antes a dónde apunta
+npm run migration:check            # falla si las entidades no coinciden con la base migrada
 ```
+
+`migration:check` corre en la CI después de las e2e. Si falla, o falta una migración o una entidad no describe lo que creó una migración. Corrige la entidad, nunca una migración que ya corrió en producción. Dos casos que TypeORM no adivina:
+- en un `@OneToOne`, la constraint única lleva el nombre de su estrategia;
+- un `enumName` igual al nombre por defecto hace que el enum se recree.
 
 Las pruebas e2e levantan la app completa y **borran la base** antes de correr las migraciones. Apúntalas solo a un Postgres local:
 
