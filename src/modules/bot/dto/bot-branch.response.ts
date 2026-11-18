@@ -190,8 +190,15 @@ export class BotOrdering {
   noDeliveryZones: BotNoDeliveryZone[];
 
   @ApiProperty({
+    example: 'America/Mazatlan',
+    description:
+      'Zona horaria de pedidos: la usan `hours`, los programados y el aviso a caja. Nace con la de la sucursal y se cambia por su lado',
+  })
+  timezone: string;
+
+  @ApiProperty({
     type: [BotOrderingHours],
-    description: 'En la zona horaria de la sucursal (`timezone`)',
+    description: 'En la zona horaria de pedidos (`ordering.timezone`)',
   })
   hours: BotOrderingHours[];
 
@@ -267,7 +274,7 @@ export class BotBranchConfig {
   @ApiProperty({
     example: 'America/Hermosillo',
     description:
-      'De la sucursal: la usan el mesero (`hours`, `dailyCloseTime`) y los pedidos (`ordering.hours`)',
+      'De la sucursal: la usa el mesero (`hours`, `dailyCloseTime`). Pedidos tiene la suya, `ordering.timezone`',
   })
   timezone: string;
 

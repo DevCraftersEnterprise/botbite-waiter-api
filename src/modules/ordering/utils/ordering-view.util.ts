@@ -20,6 +20,7 @@ export const toOrderingView = (ordering: BranchOrdering): BotOrdering => ({
       ordering.deliveryMaxKm === null ? null : toNumber(ordering.deliveryMaxKm),
   },
   noDeliveryZones: ordering.noDeliveryZones,
+  timezone: ordering.timezone,
   hours: ordering.hours,
   // Un ajuste nuevo vale su valor por defecto hasta que se guarde.
   scheduling: { ...DEFAULT_SCHEDULING, ...ordering.scheduling },

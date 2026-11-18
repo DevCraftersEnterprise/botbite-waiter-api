@@ -46,6 +46,7 @@ import {
 } from '@/modules/orders/enums/order.enums';
 import { OrderingPrivacyService } from '@/modules/orders/services/ordering-privacy.service';
 import { BranchOrdering } from '@/modules/ordering/entities/branch-ordering.entity';
+import { formatLocal } from '@/modules/orders/utils/order-messages.util';
 import { Payment } from '@/modules/orders/entities/payment.entity';
 import { Product } from '@/modules/products/entities/product.entity';
 import { Restaurant } from '@/modules/restaurants/entities/restaurant.entity';
@@ -4135,6 +4136,9 @@ describe('BotBite API (e2e)', () => {
         .set(auth(admin))
         .send(fullConfig)
         .expect(200);
+      const { timezone: branchTimezone } = await dataSource
+        .getRepository(Branch)
+        .findOneByOrFail({ id: seed.branchA.id });
 
       const expected = {
         enabled: true,
@@ -4143,6 +4147,8 @@ describe('BotBite API (e2e)', () => {
         // WhatsApp lo muestra sin "+"; el 1 se respeta.
         phoneNumber: '5216441110000',
         types: ['pickup', 'delivery'],
+        // Nace con la zona de la sucursal.
+        timezone: branchTimezone,
         delivery: { baseFee: 30, includedKm: 4, extraPer100m: 1, maxKm: 8.5 },
         noDeliveryZones: [
           {
@@ -4186,6 +4192,43 @@ describe('BotBite API (e2e)', () => {
         .set('X-BotBite-Key', botKeyA)
         .expect(200);
       expect(bot.body.branch.ordering).toEqual(expected);
+    });
+
+    it('has its own timezone, which the owner changes apart from the waiter one', async () => {
+      const owner = await tokenFor(seed.clientA.email);
+      const { timezone: branchTimezone } = await dataSource
+        .getRepository(Branch)
+        .findOneByOrFail({ id: seed.branchA.id });
+      const other =
+        branchTimezone === 'America/Cancun'
+          ? 'America/Tijuana'
+          : 'America/Cancun';
+
+      const res = await http()
+        .patch(urlA())
+        .set(auth(owner))
+        .send({ timezone: other })
+        .expect(200);
+      expect(res.body.ordering.timezone).toBe(other);
+
+      const bot = await http()
+        .get('/v1/bot/branch')
+        .set('X-BotBite-Key', botKeyA)
+        .expect(200);
+      expect(bot.body.branch.ordering.timezone).toBe(other);
+      expect(bot.body.branch.timezone).toBe(branchTimezone);
+
+      await http()
+        .patch(urlA())
+        .set(auth(owner))
+        .send({ timezone: 'Marte/Olympus' })
+        .expect(400);
+
+      await http()
+        .patch(urlA())
+        .set(auth(owner))
+        .send({ timezone: branchTimezone })
+        .expect(200);
     });
 
     it('lets the owner adjust fees and hours, replacing whole lists', async () => {
@@ -4498,6 +4541,16 @@ describe('BotBite API (e2e)', () => {
       expect(link.body.walletBalance).toBe(0);
       expect(await notificationsOf(order.id)).toHaveLength(0);
 
+      // La hora del programado sale en la zona de pedidos, no en la del mesero.
+      const orderingRepo = dataSource.getRepository(BranchOrdering);
+      const { timezone: orderingTimezone } = await orderingRepo.findOneByOrFail(
+        { branchId: seed.branchA.id },
+      );
+      await orderingRepo.update(
+        { branchId: seed.branchA.id },
+        { timezone: 'America/Cancun' },
+      );
+
       const paid = await http()
         .post('/v1/bot/payments')
         .set(bot())
@@ -4507,6 +4560,10 @@ describe('BotBite API (e2e)', () => {
           amount: order.amountDue,
         })
         .expect(201);
+      await orderingRepo.update(
+        { branchId: seed.branchA.id },
+        { timezone: orderingTimezone },
+      );
 
       expect(paid.body.status).toBe('approved');
       // 10 % del consumo, sin el envío.
@@ -4523,7 +4580,9 @@ describe('BotBite API (e2e)', () => {
       const [notice] = await notificationsOf(saved.id);
       expect(notice.type).toBe(NotificationType.ORDER);
       expect(notice.message).toContain('Pedido a domicilio pagado de Ana');
-      expect(notice.message).toContain('⏰ Programado para');
+      expect(notice.message).toContain(
+        `⏰ Programado para ${formatLocal(saved.scheduledFor!, 'America/Cancun')}`,
+      );
       expect(notice.message).toContain('envío $42.00');
       expect(notice.message).not.toContain('Calle 5');
     });
