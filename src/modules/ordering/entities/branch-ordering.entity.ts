@@ -70,6 +70,13 @@ export class BranchOrdering extends BaseEntity {
   @Column({ type: 'jsonb', default: () => `'[]'` })
   noDeliveryZones: NoDeliveryZone[];
 
+  /**
+   * La de pedidos: horario, programados y el aviso a caja. Nace con la de la
+   * sucursal y después se cambia por su lado; el mesero usa `branch.timezone`.
+   */
+  @Column({ type: 'varchar', length: 40 })
+  timezone: string;
+
   @Column({ type: 'jsonb', default: () => `'[]'` })
   hours: OrderingHours[];
 

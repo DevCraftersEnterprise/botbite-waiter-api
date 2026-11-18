@@ -150,7 +150,7 @@ export class UpdateBotConfigDto {
   @Max(20)
   maxRecommendations?: number;
 
-  /** También se cambia en los datos de la sucursal: la usan mesero y pedidos. */
+  /** La del mesero. Es la misma de los datos de la sucursal; pedidos tiene la suya. */
   @IsOptional()
   @IsTimeZone()
   timezone?: string;

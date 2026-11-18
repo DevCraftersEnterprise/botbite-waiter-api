@@ -11,6 +11,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  IsTimeZone,
   Matches,
   Max,
   MaxLength,
@@ -183,6 +184,11 @@ export class UpdateOrderingDto {
   @ArrayUnique()
   @IsIn(ORDERING_TYPES, { each: true })
   types?: OrderType[];
+
+  /** La de pedidos; la del mesero es la de la sucursal. */
+  @IsOptional()
+  @IsTimeZone()
+  timezone?: string;
 
   @IsOptional()
   @ValidateNested()
