@@ -136,7 +136,7 @@ export class OrderingConfigService {
     });
     if (!branch) throw new NotFoundException('Branch not found');
 
-    const ordering = branch.ordering ?? this.newOrdering(branchId);
+    const ordering = branch.ordering ?? this.newOrdering(branch);
     applyChanges(ordering, dto);
 
     this.assertReady(ordering, branch);
@@ -152,9 +152,11 @@ export class OrderingConfigService {
     );
   }
 
-  private newOrdering(branchId: string): BranchOrdering {
+  /** Nace con la zona horaria de la sucursal. */
+  private newOrdering(branch: Branch): BranchOrdering {
     return this.orderingRepository.create({
-      branchId,
+      branchId: branch.id,
+      timezone: branch.timezone,
       enabled: false,
       accepting: true,
       phoneNumberId: null,

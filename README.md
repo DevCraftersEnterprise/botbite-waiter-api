@@ -139,7 +139,9 @@ La API guarda lo que debe durar (menú, cuentas, comandas y notificaciones) y el
 **API del bot:** el mesero llama a `/v1/bot/*` con el header `X-BotBite-Key`. El límite es por llave (`THROTTLE_BOT_LIMIT`, 1000 por minuto), no por IP, porque el servicio del mesero atiende a todos los negocios desde la misma IP.
 - Cada llave pertenece a una sucursal, y la sucursal siempre sale de la llave. Solo se guarda su hash y se muestra una sola vez.
 - `GET /v1/bot/branch` devuelve la configuración y el catálogo. Responde con `ETag`: si el mesero envía `If-None-Match`, contesta `304` cuando nada cambió. Del restaurante trae también `logoUrl` y `privacyUrl` (null si no hay), y en `features` va `languages`: apagado, el bot atiende solo en español.
-  - **Zona horaria:** `timezone` es de la sucursal. La usan el mesero, los pedidos y los reportes del panel. Se edita en los datos de la sucursal, aunque `bot-config` también la acepta.
+  - **Zona horaria:** hay dos, y cada una se edita por su lado.
+    - `timezone` es la de la sucursal. La usan el mesero y los reportes del panel. Se edita en los datos de la sucursal o en `bot-config`.
+    - `ordering.timezone` es la de pedidos: el horario, los programados y el aviso a caja. Nace con la de la sucursal y se edita en `PATCH .../ordering`.
   - **Horario del mesero:** va en `hours`, con la misma forma que `ordering.hours`. Vacío, atiende siempre. `dailyCloseTime` es aparte: el "Cierre del día".
   - **Comisión del mesero:** `commissionPct` es la comisión de BotBite en sus pagos (`marketplace_fee`, sobre el `amountDue`). 0 es sin comisión. Solo la cambia un admin, como `ordering.commissionPct`.
 - `POST /v1/bot/orders` abre la cuenta con su primera ronda y `POST /v1/bot/orders/:code/rounds` agrega comandas. Reenviar el mismo `code` o `number` no duplica nada. La API pone los precios con el menú vigente.

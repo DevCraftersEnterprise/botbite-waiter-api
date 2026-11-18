@@ -237,17 +237,23 @@ export class OrderPaymentsService {
       }),
       this.dataSource.getRepository(Branch).findOneOrFail({
         where: { id: order.branchId },
-        select: { id: true, timezone: true },
+        relations: { ordering: true },
+        select: {
+          id: true,
+          timezone: true,
+          ordering: { id: true, timezone: true },
+        },
       }),
     ]);
 
+    // La hora de un programado va en la zona de pedidos.
     return {
       type: NotificationType.ORDER,
       message: orderingPaidMessage(
         order,
         items.filter((item) => item.round?.status !== RoundStatus.CANCELLED),
         payment,
-        branch.timezone,
+        branch.ordering?.timezone ?? branch.timezone,
       ),
     };
   }

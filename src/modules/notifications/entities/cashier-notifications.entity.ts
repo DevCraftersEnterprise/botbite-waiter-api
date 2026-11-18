@@ -7,9 +7,12 @@ import { OrderRound } from '@/modules/orders/entities/order-round.entity';
 import { Order } from '@/modules/orders/entities/order.entity';
 
 @Entity({ name: 'cashier_notifications' })
-@Index('IDX_cashier_notifications_branch_unread', ['branchId', 'createdAt'], {
-  where: '"readAt" IS NULL',
-})
+// La lista del panel filtra por sucursal y por leída, y ordena por fecha.
+@Index('IDX_cashier_notifications_branch_active', [
+  'branchId',
+  'isActive',
+  'createdAt',
+])
 @Index('UQ_cashier_notifications_branch_event', ['branchId', 'eventId'], {
   unique: true,
   where: '"eventId" IS NOT NULL',
