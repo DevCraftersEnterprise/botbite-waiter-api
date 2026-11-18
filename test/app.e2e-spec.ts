@@ -1261,6 +1261,61 @@ describe('BotBite API (e2e)', () => {
       expect(columns).toEqual([]);
     });
 
+    it('lists the 10 most recent read ones, newest first (issue #51)', async () => {
+      const repo = dataSource.getRepository(CashierNotification);
+      const read = await repo.save(
+        Array.from({ length: 12 }, (_, i) =>
+          repo.create({
+            branchId: seed.branchA.id,
+            type: NotificationType.ALERT,
+            message: `leídas: hace ${i + 1} días`,
+            isActive: false,
+            readAt: new Date(),
+          }),
+        ),
+      );
+      await Promise.all(
+        read.map((notification, i) =>
+          dataSource.query(
+            `UPDATE cashier_notifications SET "createdAt" = now() - make_interval(days => $2) WHERE id = $1`,
+            [notification.id, i + 1],
+          ),
+        ),
+      );
+
+      const token = await tokenFor(seed.clientA.email);
+      const res = await http().get(listUrl()).set(auth(token)).expect(200);
+      const inactive = (res.body as { inactive: { message: string }[] })
+        .inactive;
+      expect(inactive.map((n) => n.message)).toEqual(
+        Array.from({ length: 10 }, (_, i) => `leídas: hace ${i + 1} días`),
+      );
+
+      await repo.delete(read.map((notification) => notification.id));
+    });
+
+    it('both lists use the branch index instead of scanning the table', async () => {
+      const plans = await dataSource.transaction(async (manager) => {
+        await manager.query('SET LOCAL enable_seqscan = off');
+        return Promise.all(
+          [true, false].map(async (isActive) => {
+            const rows: { 'QUERY PLAN': string }[] = await manager.query(
+              `EXPLAIN SELECT * FROM cashier_notifications
+               WHERE "branchId" = $1 AND "isActive" = $2
+               ORDER BY "createdAt" DESC LIMIT 10`,
+              [seed.branchA.id, isActive],
+            );
+            return rows.map((row) => row['QUERY PLAN']).join('\n');
+          }),
+        );
+      });
+
+      for (const plan of plans) {
+        expect(plan).toContain('IDX_cashier_notifications_branch_active');
+        expect(plan).not.toContain('Seq Scan');
+      }
+    });
+
     it('deletes read notifications after 90 days and keeps the rest', async () => {
       const repo = dataSource.getRepository(CashierNotification);
       const daysAgo = (days: number) =>

@@ -82,6 +82,10 @@ export class NotificationsService {
     return this.setActive(notificationId, true);
   }
 
+  /**
+   * Las 50 sin leer y las 10 leídas más recientes. Las dos usan el índice
+   * `IDX_cashier_notifications_branch_active`, así que no recorren la tabla.
+   */
   async findByBranch(branchId: string): Promise<{
     active: CashierNotification[];
     inactive: CashierNotification[];
@@ -94,7 +98,7 @@ export class NotificationsService {
       }),
       this.cashierNotificationRepository.find({
         where: { branchId, isActive: false },
-        order: { createdAt: 'ASC' },
+        order: { createdAt: 'DESC' },
         take: 10,
       }),
     ]);
