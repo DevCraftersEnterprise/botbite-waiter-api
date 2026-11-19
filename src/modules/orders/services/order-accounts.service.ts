@@ -968,7 +968,7 @@ export class OrderAccountsService {
     const ids = [...new Set(items.map((item) => item.menuItemId))];
     const menuItems = await manager.find(MenuItem, {
       where: { id: In(ids), menu: { branchId: order.branchId } },
-      relations: { product: true, category: true },
+      relations: { product: true, category: true, menu: true },
     });
     const byId = new Map(menuItems.map((item) => [item.id, item]));
 
@@ -977,6 +977,29 @@ export class OrderAccountsService {
       throw new BadRequestException(
         `Menu items not found in this branch: ${unknown.join(', ')}`,
       );
+    }
+
+    // El catálogo del bot incluye los platillos apagados para que conteste
+    // "no lo tenemos". Si aun así llega uno (catálogo en caché o el dueño lo
+    // apagó mientras el cliente pedía), no se manda a cocina (#38).
+    const unavailable = menuItems
+      .filter(
+        (item) =>
+          !(
+            item.isActive &&
+            item.product.isActive &&
+            item.category.isActive &&
+            item.menu.isActive
+          ),
+      )
+      .map((item) => item.id);
+    if (unavailable.length > 0) {
+      throw new ConflictException({
+        statusCode: 409,
+        error: 'Conflict',
+        message: `Menu items not available: ${unavailable.join(', ')}`,
+        unavailable,
+      });
     }
 
     const round = await manager.save(
